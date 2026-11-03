@@ -4,6 +4,8 @@
 
 带图形界面：选视频 → 跑 → 在应用里对着视频看报告。
 
+**下载**：[Releases](https://github.com/wyixia/Video-extractor/releases/latest) 里有两个包——`full` 双击即用（Python 与 ffmpeg 都打进去了，58 MB），`lite` 只有代码（需要自备 Python 3.9+，0.1 MB）。功能完全一致。
+
 ---
 
 ## 它是什么，不是什么
