@@ -111,10 +111,11 @@ def _ffmpeg(rep: Report, fix: bool, allow_download: bool):
     if not allow_download:
         rep.add(BAD, "ffmpeg / ffprobe", "未找到，且已禁用下载")
         return
-    print("   正在下载 ffmpeg（约 80MB，首次较慢）…")
+    print("   正在安装 ffmpeg（首次需下载，几十 MB）…")
     try:
-        _install_ffmpeg()
-        rep.add(OK, "ffmpeg / ffprobe", f"已下载到 {ROOT / 'bin'}")
+        got = _install_ffmpeg()
+        tail = "" if len(got) > 1 else "（只有 ffmpeg，未带 ffprobe）"
+        rep.add(OK, "ffmpeg / ffprobe", f"已安装到 {ROOT / 'bin'}{tail}")
     except Exception as e:
         rep.add(BAD, "ffmpeg / ffprobe", f"自动安装失败：{type(e).__name__}: {str(e)[:120]}")
         rep.add(WARN, "手动安装", _manual_hint())
@@ -129,10 +130,55 @@ def _manual_hint() -> str:
     return "sudo apt install ffmpeg  （或把静态版解压到本程序的 bin 目录）"
 
 
-def _install_ffmpeg():
-    """下载并解压到 bin/。只处理 Windows 与 Linux；macOS 建议用 brew。"""
+def _install_ffmpeg() -> list:
+    """装 ffmpeg 到 bin/。先试 wheel（快），再退回官方压缩包（慢但完整）。
+
+    gyan.dev 走国际线路，实测只有几 KB/s，国内用户等不起；
+    imageio-ffmpeg 的 wheel 走 PyPI 镜像，几十秒就下完。
+    代价是 wheel 里只有 ffmpeg、没有 ffprobe —— 读时长/分辨率已经能用
+    `ffmpeg -i` 的输出顶替，所以这个缺口不影响运行。
+    """
     bin_dir = ROOT / "bin"
     bin_dir.mkdir(exist_ok=True)
+    errors = []
+    for name, fn in (("imageio-ffmpeg", _install_ffmpeg_wheel),
+                     ("官方压缩包", _install_ffmpeg_archive)):
+        try:
+            print(f"   尝试用{name}安装…")
+            got = fn(bin_dir)
+            if got:
+                return got
+            errors.append(f"{name}：没取到可执行文件")
+        except Exception as e:
+            errors.append(f"{name}：{type(e).__name__}: {str(e)[:100]}")
+    raise RuntimeError("；".join(errors))
+
+
+def _install_ffmpeg_wheel(bin_dir: Path) -> list:
+    """从 PyPI 装 imageio-ffmpeg，把里面的静态 ffmpeg 复制进 bin/。"""
+    r = subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+                        "--quiet", "--upgrade", "imageio-ffmpeg"],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                       text=True, encoding="utf-8", errors="replace")
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or "").strip()[:160] or "pip 返回非零")
+
+    importlib.invalidate_caches()
+    mod = importlib.import_module("imageio_ffmpeg")
+    if not hasattr(mod, "get_ffmpeg_exe"):
+        raise RuntimeError("装上了但没有 get_ffmpeg_exe")
+    src = Path(mod.get_ffmpeg_exe())
+    if not src.exists():
+        raise RuntimeError(f"找不到可执行文件：{src}")
+    dst = bin_dir / ("ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg")
+    shutil.copy2(src, dst)
+    if platform.system() != "Windows":
+        dst.chmod(0o755)
+    return [dst.name]
+
+
+def _install_ffmpeg_archive(bin_dir: Path) -> list:
+    """下载官方压缩包并解压到 bin/。只处理 Windows 与 Linux；macOS 建议用 brew。"""
     system = platform.system()
     if system == "Windows":
         url, mode = FFMPEG_WIN, "zip"
@@ -164,8 +210,9 @@ def _install_ffmpeg():
                 if system != "Windows":
                     dst.chmod(0o755)
                 copied.append(name)
-        if len(copied) < 2:
-            raise RuntimeError(f"压缩包里没找到可执行文件（找到 {copied}）")
+        if not copied:
+            raise RuntimeError("压缩包里没找到可执行文件")
+        return copied
 
 
 def _config(rep: Report, path: str):
