@@ -1,0 +1,15 @@
+# 核心依赖
+openai>=1.52.0
+PyYAML>=6.0
+requests>=2.31.0
+jsonschema>=4.20.0
+
+# 测试
+pytest>=8.0.0
+
+# 可选：预处理增强（按需安装）
+# transnetv2-pytorch>=0.1.0
+# torch>=2.0
+# torchaudio>=2.0
+# demucs>=4.0
+# oss2>=2.18.0

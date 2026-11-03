@@ -1,0 +1,33 @@
+# 运行产物
+_work/
+output/
+_probe/
+dist/
+
+# 大二进制：ffmpeg 不进仓库，由启动脚本自动下载或随发行包提供
+bin/ffmpeg
+bin/ffmpeg.exe
+bin/ffprobe
+bin/ffprobe.exe
+
+# 本机配置与提示词覆盖（属于用户私有，不随代码发布）
+config/config.local.yaml
+config/prompts.local/*.txt
+
+# 密钥
+.env
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# 编辑器与系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

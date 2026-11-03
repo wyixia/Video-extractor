@@ -1,0 +1,56 @@
+# 视频分镜标注流水线 · 全局配置
+# 配置与业务逻辑分离：切换服务商/模型只改这里，不改代码。
+
+provider: dashscope          # dashscope | mock（mock 用于离线测试，不调云端）
+
+dashscope:
+  api_key_env: DASHSCOPE_API_KEY
+  # OpenAI 兼容端点（VL / Omni / Merge 走这里）
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  # ASR 异步任务走 DashScope 原生 API
+  asr_base_url: https://dashscope.aliyuncs.com/api/v1
+  region: cn-beijing        # 音频类模型需北京地域 Key
+
+models:
+  asr: paraformer           # 备选 qwen3-asr-flash-filetrans（需异步获取时间戳）
+  sed: qwen3.8-omni-flash
+  music: qwen3.8-omni-flash
+  vl: qwen2.5-vl-72b-instruct   # 可升级 qwen3-vl-*
+  merge: qwen-plus              # 质量优先可改 qwen-max
+
+preprocess:
+  shot_split:
+    method: ffmpeg_scene    # transnetv2 | ffmpeg_scene；transnetv2 需额外安装
+    scene_threshold: 0.3
+  keyframes:
+    max_per_shot: 4         # 中间帧 + 每 2 秒补抽，上限 4
+    interval_sec: 2
+  audio:
+    method: demucs          # demucs | ffmpeg（ffmpeg 不分离，vocals=no_vocals=原音）
+    two_stems: vocals
+
+runtime:
+  max_workers: 8
+  call_timeout_sec: 30
+  merge_timeout_sec: 60
+  retry: 2
+  retry_backoff_sec: [1, 2]
+
+skills:
+  asr:   { enabled: true }
+  sed:   { enabled: true }
+  music: { enabled: true }
+  vl:    { enabled: true }
+
+paths:
+  workdir: ./_work
+  output: ./output
+
+storage:
+  # 云端 ASR 需要公网可访问的音频 URL；本地开发用 mock，生产配 OSS
+  type: local               # local | oss
+  oss:
+    endpoint: ""
+    bucket: ""
+    access_key_env: OSS_ACCESS_KEY_ID
+    secret_key_env: OSS_ACCESS_KEY_SECRET

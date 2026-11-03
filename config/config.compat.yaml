@@ -1,0 +1,74 @@
+# 自定义 OpenAI 兼容端点运行时配置（密钥只从环境变量读，不落盘）
+provider: compat
+
+compat:
+  base_url_env: LLM_BASE_URL
+  api_key_env: LLM_API_KEY
+  base_url: https://maas.qianwenaiapi.com/compatible-mode/v1
+
+models:
+  # 每个角色对模型的要求不同，换模型前先看要求，再用 tools/check_models.py 实测。
+  # 共同前提：OpenAI 兼容的 /chat/completions，且能被提示词要求着输出 JSON。
+  #
+  # asr / sed / music —— 必须能接音频，且必须真的听
+  #   请求体形如 {"type":"input_audio","input_audio":{"data":"data:audio/mp3;base64,..."}}
+  #   只支持纯文本对话的模型会返回 400（invalid_parameter_error）；有的模型接受请求
+  #   但忽略音频照常作答，那种"能返回内容"实则一个音都没听，靠 usage 里的 audio_tokens 识别。
+  #   这类字段也决定了必须用 omni / audio 系列，纯文本或纯视觉模型不行。
+  asr: qwen3.5-omni-plus       # 分句明显更细：同段音频 5 句 vs flash 的 3 句，时间与字数对得上
+  sed: qwen3.8-omni-flash
+  music: qwen3.5-omni-plus
+  # vl —— 必须能接图片（image_url 的 base64 data URL），且单次能吃多张（一镜 3–6 帧）
+  vl: qwen3.8-flash
+  # merge —— 只看文本，普通对话模型即可；输出要能稳定给 JSON
+  merge: qwen3.8-flash
+  # calibrate —— 可选。字幕与转写的双向比对也用文本，不配就复用 merge
+  # calibrate: qwen3.8-flash
+
+preprocess:
+  shot_split:
+    method: ffmpeg_scene        # 该片 7 镜均为真切换（逐切点前后帧已人工核对）
+    fixed_interval_sec: 4
+    scene_threshold: 0.2        # 同场景换机位的像素差只有 0.20-0.25，阈值调高会漏切
+    min_shot_sec: 0.5           # 只挡 0.5 秒以下的噪声碎片；本片最短真镜头 0.79s
+    max_shot_sec: 10            # 超长片段按此上限再分（无转场素材否则整段只有一个镜头）
+  keyframes:
+    max_per_shot: 6             # 帧数越多样本越密，长镜头补足中间过程
+    interval_sec: 0.6           # 目标抽帧间隔；短镜头仍保底 3 帧
+    width: 1024                 # 帧图宽度，越大细节越清楚（视觉 token 相应增加）
+  motion:                        # CPU 运动测量：纯 PIL 精度不足，默认关闭（详见 docs/03）
+    enabled: false
+    frames_per_shot: 6
+    zoom_threshold_pct: 3.0
+    pan_threshold_ratio: 0.03
+  audio_seg:
+    mode: whole                 # 整段一次送；目标素材 1–2 分钟，无分块必要
+    hard_max_sec: 300           # 超过该时长才退化为分块，正常素材不会触发
+    window_sec: 300             # mode=chunk 时的块长
+
+speech:
+  assign: whole                 # whole=整句挂句首镜（不断词）；slice=按比例切给各镜
+
+runtime:
+  max_workers: 4
+  call_timeout_sec: 120
+  merge_timeout_sec: 120
+  vl_max_tokens: 3600             # 11 个子项 + 情绪段，预算比原来 9 子项时提高
+  merge_max_tokens: 2500          # 每镜叙事作用 + 音画综合，输出比只写总览长得多
+  merge_enable_thinking: false   # 总览文案不需要思考，省时间与 token
+  audio_enable_thinking: false   # 听音识别不需要长链思考（开思考单镜 59s，关掉 3s 且结论一致）
+  retry: 4
+  retry_backoff_sec: [4, 8, 16, 24]
+
+skills:
+  asr:   { enabled: true }      # 专有名词校准自动跟随：有字幕就地校正，无字幕自动跳过，不用配
+  sed:   { enabled: true }
+  music: { enabled: true }
+  vl:    { enabled: true }
+
+paths:
+  workdir: ./_work
+  output: ./output
+
+storage:
+  type: local

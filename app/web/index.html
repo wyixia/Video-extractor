@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>视频分镜标注</title>
+<style>
+:root{
+  --bg:#0f1115; --panel:#171a21; --panel2:#1d2129; --line:#272d38;
+  --text:#e6edf3; --dim:#8b949e; --faint:#5b6472;
+  --accent:#4f8cff; --ok:#3fb950; --warn:#d29922; --err:#f85149;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.6 system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+button{font:inherit;cursor:pointer;border:none;border-radius:8px}
+input,select,textarea{font:inherit;color:var(--text);background:var(--panel2);
+  border:1px solid var(--line);border-radius:8px;padding:8px 10px;outline:none;width:100%}
+input:focus,textarea:focus,select:focus{border-color:var(--accent)}
+a{color:var(--accent)}
+
+/* 顶栏 */
+header{display:flex;align-items:center;gap:14px;padding:14px 22px;
+  border-bottom:1px solid var(--line);background:#12151b;position:sticky;top:0;z-index:20}
+.logo{display:flex;align-items:center;gap:9px;font-weight:600;font-size:15px}
+.logo i{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent)}
+.status{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.pill{font-size:12px;color:var(--dim);background:var(--panel);border:1px solid var(--line);
+  padding:3px 10px;border-radius:20px;display:flex;gap:6px;align-items:center}
+.pill b{color:var(--text);font-weight:500}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--faint)}
+.dot.ok{background:var(--ok)} .dot.bad{background:var(--err)} .dot.warn{background:var(--warn)}
+
+main{max-width:1280px;margin:0 auto;padding:22px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
+h1{font-size:19px;margin:0 0 4px} h2{font-size:14px;margin:0 0 12px;color:var(--dim);font-weight:500;
+  letter-spacing:.02em}
+.hint{color:var(--dim);font-size:12.5px;margin:0}
+.mono{font-family:"SFMono-Regular",Consolas,monospace;font-size:12.5px}
+
+/* 选择区 */
+#stage-pick{display:grid;grid-template-columns:1fr 380px;gap:18px;align-items:start}
+.drop{border:1.5px dashed #333c4c;border-radius:14px;padding:44px 24px;text-align:center;
+  transition:.16s;background:linear-gradient(180deg,#151922,#12151b)}
+.drop.hot{border-color:var(--accent);background:#152033}
+.drop .big{font-size:15px;margin:10px 0 6px}
+.drop svg{opacity:.75}
+.btn{background:var(--accent);color:#fff;padding:10px 18px;font-weight:500;transition:.15s}
+.btn:hover{filter:brightness(1.1)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.ghost{background:var(--panel2);color:var(--text);border:1px solid var(--line)}
+.btn.ghost:hover{border-color:#3a4557}
+.btn.sm{padding:6px 12px;font-size:12.5px}
+.row{display:flex;gap:8px;align-items:center}
+.field{margin-bottom:12px}
+.field label{display:block;font-size:12.5px;color:var(--dim);margin-bottom:5px}
+.file{margin-top:14px;padding:10px 12px;background:var(--panel2);border-radius:9px;
+  font-size:12.5px;word-break:break-all;display:none}
+.file.show{display:block}
+.file b{color:var(--ok);font-weight:500}
+
+/* 配置 */
+.tabs{display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--line);padding-bottom:10px}
+.tab{padding:6px 12px;border-radius:7px;color:var(--dim);font-size:13px;background:none}
+.tab.on{background:var(--panel2);color:var(--text)}
+.models{display:grid;gap:10px}
+.mrow{display:grid;grid-template-columns:74px 1fr;gap:10px;align-items:center}
+.mrow span{font-size:12.5px;color:var(--dim)}
+.mrow span i{display:block;font-size:11px;color:var(--faint);font-style:normal}
+
+/* 运行 */
+#stage-run{display:none}
+.bar{height:8px;background:#222833;border-radius:99px;overflow:hidden;margin:14px 0 8px}
+.bar>i{display:block;height:100%;background:linear-gradient(90deg,#3d7bfd,#6ea8ff);
+  width:0;transition:width .45s ease;border-radius:99px}
+.stagerow{display:flex;align-items:baseline;gap:10px}
+.stagerow .pct{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--dim)}
+.stages{display:flex;gap:6px;margin-top:16px;flex-wrap:wrap}
+.st{font-size:11.5px;padding:4px 10px;border-radius:6px;background:var(--panel2);color:var(--faint)}
+.st.on{background:#1b2a45;color:#9dc0ff}
+.st.done{background:#16241a;color:#7ee787}
+.log{margin-top:16px;background:#0c0e12;border:1px solid var(--line);border-radius:10px;
+  padding:12px;height:230px;overflow:auto;font-family:"SFMono-Regular",Consolas,monospace;
+  font-size:12px;color:#9aa4b2;white-space:pre-wrap;line-height:1.7}
+.log .e{color:#ff9b93}
+
+/* 结果 */
+#stage-done{display:none}
+.done-grid{display:grid;grid-template-columns:420px 1fr;gap:18px;align-items:start}
+.player{position:sticky;top:78px}
+video{width:100%;border-radius:12px;background:#000;display:block;max-height:300px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin-top:14px;font-size:12.5px}
+.kv dt{color:var(--dim)} .kv dd{margin:0}
+.report{background:#fff;border-radius:12px;overflow:hidden;height:calc(100vh - 150px)}
+.report iframe{width:100%;height:100%;border:0;background:#fff}
+.errbox{background:#2a1416;border:1px solid #63232a;color:#ffb3ae;padding:12px 14px;
+  border-radius:10px;font-size:13px;margin-top:14px;white-space:pre-wrap;display:none}
+
+/* 提示词弹窗 */
+.modal{position:fixed;inset:0;background:rgba(6,8,12,.72);display:none;
+  align-items:center;justify-content:center;z-index:50;padding:24px}
+.modal.show{display:flex}
+.sheet{background:var(--panel);border:1px solid var(--line);border-radius:16px;
+  width:min(900px,100%);max-height:88vh;display:flex;flex-direction:column;overflow:hidden}
+.sheet header{position:static;background:none;border-bottom:1px solid var(--line);padding:14px 18px}
+.sheet textarea{flex:1;min-height:420px;border:none;border-radius:0;background:#0c0e12;
+  font-family:"SFMono-Regular",Consolas,monospace;font-size:12.5px;line-height:1.75;resize:none;
+  padding:16px}
+.sheet .foot{padding:12px 18px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:center}
+.sheet .foot .msg{font-size:12.5px;color:var(--dim);margin-right:auto}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#1f2632;
+  border:1px solid var(--line);padding:10px 18px;border-radius:10px;font-size:13px;
+  opacity:0;transition:.25s;pointer-events:none;z-index:99}
+.toast.show{opacity:1}
+@media(max-width:980px){
+  #stage-pick,.done-grid{grid-template-columns:1fr}
+  .player{position:static}
+  .report{height:70vh}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><i></i>视频分镜标注</div>
+  <div class="status" id="status"></div>
+</header>
+
+<main>
+  <!-- 1. 选择 + 配置 -->
+  <section id="stage-pick">
+    <div class="card">
+      <h1>选择一个视频</h1>
+      <p class="hint">支持 mp4 / mov / mkv / webm，建议 1–2 分钟。切分与抽帧在本机完成，画面和声音只送给你配置的模型。</p>
+      <div class="drop" id="drop">
+        <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="#6b7688" stroke-width="1.4">
+          <rect x="2.5" y="5" width="19" height="14" rx="3"/><path d="M10 9.5l5 2.5-5 2.5z" fill="#6b7688" stroke="none"/>
+        </svg>
+        <div class="big">把视频拖到这里，或</div>
+        <button class="btn" id="pick">选择视频文件</button>
+        <div class="hint" style="margin-top:10px">拖入会复制一份到工作目录</div>
+      </div>
+      <div class="file" id="fileBox"></div>
+
+      <div class="row" style="margin-top:18px">
+        <button class="btn" id="start" disabled style="flex:1">开始标注</button>
+        <button class="btn ghost" id="openPrompt">编辑提示词</button>
+      </div>
+      <p class="hint" style="margin-top:10px">开始前会先实测模型是否真能读音频和图片，通不过会直接停下，不会跑出空结果。</p>
+    </div>
+
+    <div class="card">
+      <h2>配置</h2>
+      <div class="tabs">
+        <button class="tab on" data-tab="models">模型</button>
+        <button class="tab" data-tab="run">运行</button>
+      </div>
+
+      <div id="tab-models">
+        <div class="models">
+          <div class="mrow"><span>台词 ASR<i>需音频</i></span><input id="m-asr" placeholder="qwen3.5-omni-plus"></div>
+          <div class="mrow"><span>环境音<i>需音频</i></span><input id="m-sed"></div>
+          <div class="mrow"><span>音乐<i>需音频</i></span><input id="m-music"></div>
+          <div class="mrow"><span>画面<i>需视觉</i></span><input id="m-vl"></div>
+          <div class="mrow"><span>总览<i>纯文本</i></span><input id="m-merge"></div>
+        </div>
+        <div class="field" style="margin-top:14px">
+          <label>接口地址</label>
+          <input id="baseUrl" placeholder="https://…/compatible-mode/v1">
+        </div>
+        <p class="hint">密钥从环境变量读，不写进配置文件、不经过本界面。</p>
+      </div>
+
+      <div id="tab-run" style="display:none">
+        <div class="field">
+          <label>并发数</label>
+          <input id="r-workers" type="number" min="1" max="16">
+        </div>
+        <div class="field">
+          <label>台词归属</label>
+          <select id="r-speech">
+            <option value="whole">整句挂在句首镜头（不断词）</option>
+            <option value="slice">按时间比例切给各镜（可能断词）</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>切镜灵敏度（0.1–0.6，越低切得越多）</label>
+          <input id="r-scene" type="number" step="0.05" min="0.05" max="0.9">
+        </div>
+        <div class="field">
+          <label>单镜最长秒数（超过则等分）</label>
+          <input id="r-maxshot" type="number" step="1" min="2">
+        </div>
+        <button class="btn ghost sm" id="saveCfg" style="margin-top:6px">保存配置</button>
+        <p class="hint" style="margin-top:10px">保存在 config/config.local.yaml，不覆盖主配置。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2. 运行 -->
+  <section id="stage-run">
+    <div class="card">
+      <div class="stagerow">
+        <h1 id="runTitle">正在标注</h1>
+        <span class="pct" id="runPct">0%</span>
+      </div>
+      <p class="hint" id="runDetail">准备中…</p>
+      <div class="bar"><i id="runBar"></i></div>
+      <div class="stages" id="stages"></div>
+      <div class="log" id="log">等待开始…</div>
+    </div>
+  </section>
+
+  <!-- 3. 结果 -->
+  <section id="stage-done">
+    <div class="done-grid">
+      <div class="card player">
+        <video id="v" controls preload="metadata" src="/api/media"></video>
+        <dl class="kv">
+          <dt>镜头</dt><dd id="d-shots">—</dd>
+          <dt>用时</dt><dd id="d-time">—</dd>
+          <dt>文件</dt><dd id="d-file" class="mono" style="word-break:break-all">—</dd>
+        </dl>
+        <div class="row" style="margin-top:14px">
+          <a class="btn sm" href="/api/form" download>下载表单 JSON</a>
+          <a class="btn ghost sm" href="/api/report" target="_blank">单独打开报告</a>
+          <button class="btn ghost sm" id="again">再标一个</button>
+        </div>
+        <div class="errbox" id="errBox"></div>
+      </div>
+      <div class="report"><iframe id="report" src="about:blank"></iframe></div>
+    </div>
+  </section>
+</main>
+
+<!-- 提示词编辑 -->
+<div class="modal" id="modal">
+  <div class="sheet">
+    <header class="row" style="display:flex">
+      <div>
+        <h1 style="font-size:15px">编辑提示词</h1>
+        <p class="hint" id="pmSrc"></p>
+      </div>
+      <div style="margin-left:auto" class="row">
+        <select id="pmName" style="width:150px">
+          <option value="vl">vl · 画面</option>
+          <option value="asr">asr · 台词</option>
+          <option value="sed">sed · 环境音</option>
+          <option value="music">music · 音乐</option>
+          <option value="merge">merge · 总览</option>
+          <option value="calibrate">calibrate · 校对</option>
+        </select>
+      </div>
+    </header>
+    <textarea id="pmText" spellcheck="false"></textarea>
+    <div class="foot">
+      <span class="msg" id="pmMsg">键名（如 shot_size、voice）不能删，删了字段会全部变成“无法识别”。</span>
+      <button class="btn ghost sm" id="pmReset">恢复默认</button>
+      <button class="btn sm" id="pmSave">保存为本机版本</button>
+      <button class="btn ghost sm" id="pmClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+let video = "", timer = null, pollTimer = null, cfgs = null;
+
+const STAGES = [
+  ["preprocess","切分镜头"],["analyze","识别画面与声音"],["repair","补跑"],
+  ["calibrate","校对台词"],["merge","拼装结果"],["done","完成"]
+];
+
+function toast(msg, ms = 2200){
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(t._t); t._t = setTimeout(()=>t.classList.remove("show"), ms);
+}
+async function api(url, opt){
+  const r = await fetch(url, opt);
+  const ct = r.headers.get("content-type") || "";
+  const data = ct.includes("json") ? await r.json() : await r.text();
+  if(!r.ok) throw new Error((data && data.error) || r.statusText);
+  return data;
+}
+function el(tag, cls, txt){ const e = document.createElement(tag); if(cls) e.className = cls;
+  if(txt != null) e.textContent = txt; return e; }
+
+/* ---------- 配置 ---------- */
+async function loadCfg(){
+  try{
+    const c = await api("/api/config");
+    cfgs = c;
+    const m = c.models || {};
+    $("#m-asr").value = m.asr || ""; $("#m-sed").value = m.sed || "";
+    $("#m-music").value = m.music || ""; $("#m-vl").value = m.vl || "";
+    $("#m-merge").value = m.merge || "";
+    $("#baseUrl").value = c.base_url || "";
+    $("#r-workers").value = (c.runtime || {}).max_workers || 4;
+    $("#r-speech").value = c.speech_assign || "whole";
+    $("#r-scene").value = (c.shot || {}).scene_threshold ?? 0.2;
+    $("#r-maxshot").value = (c.shot || {}).max_shot_sec ?? 10;
+    paintStatus(c);
+  }catch(e){ toast("读取配置失败：" + e.message); }
+}
+function paintStatus(c){
+  const s = $("#status"); s.innerHTML = "";
+  const ok = c.has_api_key;
+  const p1 = el("div","pill"); p1.append(el("i","dot " + (ok?"ok":"bad")));
+  p1.append(document.createTextNode("密钥 " + (ok?"已设置":"未设置"))); s.append(p1);
+  if(c.local_file){ const p = el("div","pill"); p.append(el("b",null,"本机配置")); s.append(p); }
+  const p3 = el("div","pill"); p3.append(el("b",null,"模型可改")); s.append(p3);
+}
+async function saveCfg(silent){
+  const body = {
+    models:{asr:$("#m-asr").value.trim(), sed:$("#m-sed").value.trim(),
+            music:$("#m-music").value.trim(), vl:$("#m-vl").value.trim(),
+            merge:$("#m-merge").value.trim()},
+    runtime:{max_workers:Number($("#r-workers").value)||4},
+    speech_assign:$("#r-speech").value
+  };
+  try{ await api("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},
+       body:JSON.stringify(body)});
+    if(!silent) toast("已保存到本机配置");
+    loadCfg();
+  }catch(e){ toast("保存失败：" + e.message); }
+}
+$("#saveCfg").onclick = () => saveCfg(false);
+
+$$(".tab").forEach(t => t.onclick = () => {
+  $$(".tab").forEach(x => x.classList.remove("on")); t.classList.add("on");
+  $("#tab-models").style.display = t.dataset.tab === "models" ? "" : "none";
+  $("#tab-run").style.display = t.dataset.tab === "run" ? "" : "none";
+});
+
+/* ---------- 选视频 ---------- */
+$("#pick").onclick = async () => {
+  try{
+    const r = await api("/api/pick-video",{method:"POST"});
+    if(r.path) setVideo(r.path);
+  }catch(e){ toast(e.message); }
+};
+function setVideo(p){
+  video = p;
+  const box = $("#fileBox");
+  box.classList.add("show");
+  box.innerHTML = "";
+  box.append(el("b",null,"已选择 "));
+  box.append(document.createTextNode(p));
+  $("#start").disabled = false;
+}
+const drop = $("#drop");
+["dragenter","dragover"].forEach(k => drop.addEventListener(k, e => {
+  e.preventDefault(); drop.classList.add("hot");
+}));
+["dragleave","drop"].forEach(k => drop.addEventListener(k, e => {
+  e.preventDefault(); drop.classList.remove("hot");
+}));
+drop.addEventListener("drop", async e => {
+  const f = e.dataTransfer.files[0]; if(!f) return;
+  toast("正在复制视频…", 5000);
+  try{
+    const r = await api("/api/upload?name=" + encodeURIComponent(f.name),
+      {method:"PUT", body:f});
+    setVideo(r.path); toast("已就绪");
+  }catch(err){ toast("上传失败：" + err.message); }
+});
+
+/* ---------- 运行 ---------- */
+$("#start").onclick = async () => {
+  if(!video) return;
+  $("#start").disabled = true;
+  try{
+    await saveCfg(true);
+    await api("/api/start",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({video, speech_assign:$("#r-speech").value})});
+    showRun(); startPoll();
+  }catch(e){ toast(e.message); $("#start").disabled = false; }
+};
+function showRun(){
+  $("#stage-pick").style.display = "none";
+  $("#stage-done").style.display = "none";
+  $("#stage-run").style.display = "";
+  $("#runBar").style.width = "0%"; $("#runPct").textContent = "0%";
+  $("#log").textContent = "";
+  const box = $("#stages"); box.innerHTML = "";
+  STAGES.forEach(([k,label]) => { const d = el("span","st",label); d.dataset.k = k; box.append(d); });
+}
+let lastLogLen = 0;
+function paintState(s){
+  $("#runBar").style.width = Math.round((s.progress||0)*100) + "%";
+  $("#runPct").textContent = Math.round((s.progress||0)*100) + "%";
+  $("#runDetail").textContent = s.detail || (s.status === "running" ? "处理中…" : "");
+  const idx = STAGES.findIndex(x => x[0] === s.stage);
+  $$(".st").forEach((d,i) => {
+    d.classList.toggle("done", idx > i || s.status === "done");
+    d.classList.toggle("on", idx === i && s.status === "running");
+  });
+  const log = $("#log");
+  const text = (s.log || []).join("\n");
+  if(text.length !== lastLogLen){
+    log.textContent = text || "…";
+    log.scrollTop = log.scrollHeight;
+    lastLogLen = text.length;
+  }
+  if(s.status === "done"){ stopPoll(); showDone(s); }
+  if(s.status === "error"){
+    stopPoll();
+    const box = $("#errBox");
+    box.style.display = "block";
+    box.textContent = "任务失败：" + (s.error || "未知错误") + "\n\n日志见上一步。";
+    $("#runTitle").textContent = "出错了";
+    $("#runDetail").textContent = s.error || "";
+    $("#stage-run").style.display = "";
+    toast("任务失败");
+  }
+}
+async function tick(){
+  try{ const s = await api("/api/state"); paintState(s); }
+  catch(e){ /* 服务重启时忽略 */ }
+}
+function startPoll(){ stopPoll(); tick(); pollTimer = setInterval(tick, 900); }
+function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer = null; } }
+
+function showDone(s){
+  $("#stage-pick").style.display = "none";
+  $("#stage-run").style.display = "none";
+  $("#stage-done").style.display = "";
+  $("#v").src = "/api/media?t=" + Date.now();
+  $("#report").src = "/api/report?t=" + Date.now();
+  $("#d-shots").textContent = (s.shots || 0) + " 个镜头";
+  $("#d-time").textContent = (s.elapsed || 0) + " 秒";
+  $("#d-file").textContent = s.video || "";
+  $("#again").onclick = () => { location.reload(); };
+  $("#start").disabled = false;
+}
+
+/* ---------- 提示词 ---------- */
+async function loadPrompt(name){
+  try{
+    const p = await api("/api/prompt?name=" + name);
+    $("#pmText").value = p.text;
+    $("#pmSrc").textContent = p.source === "local"
+      ? "当前使用本机版本（config/prompts.local/" + name + ".txt）"
+      : "当前使用内置版本；保存后会生成本机副本，内置文件不动";
+  }catch(e){ toast(e.message); }
+}
+$("#openPrompt").onclick = () => { $("#modal").classList.add("show"); loadPrompt($("#pmName").value); };
+$("#pmName").onchange = e => loadPrompt(e.target.value);
+$("#pmClose").onclick = () => $("#modal").classList.remove("show");
+$("#pmSave").onclick = async () => {
+  const name = $("#pmName").value, text = $("#pmText").value;
+  try{
+    const r = await api("/api/prompt",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name,text})});
+    if(r.problems && r.problems.length){
+      $("#pmMsg").textContent = "保存了，但有问题：" + r.problems[0];
+      $("#pmMsg").style.color = "var(--warn)";
+    }else{
+      $("#pmMsg").textContent = "已保存，下次运行生效。";
+      $("#pmMsg").style.color = "var(--ok)";
+      loadPrompt(name);
+    }
+  }catch(e){ $("#pmMsg").textContent = e.message; }
+};
+$("#pmReset").onclick = async () => {
+  const name = $("#pmName").value;
+  try{
+    await api("/api/prompt",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name, text:"", reset:true})});
+    $("#pmMsg").textContent = "已恢复内置版本。";
+    loadPrompt(name);
+  }catch(e){ $("#pmMsg").textContent = e.message; }
+};
+
+loadCfg();
+tick();
+</script>
+</body>
+</html>
