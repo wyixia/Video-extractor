@@ -59,8 +59,8 @@
 ### lite
 
 ```bash
-unzip VideoExtractor-1.0.0-lite.zip
-cd VideoExtractor-1.0.0-lite
+unzip VideoExtractor-1.0.1-lite.zip
+cd VideoExtractor-1.0.1-lite
 python tools/doctor.py --fix      # 缺什么装什么
 python -m app.server              # 浏览器会自动打开
 ```
@@ -184,6 +184,7 @@ docs/           设计与踩坑记录
 ## 已知限制
 
 - 单次一个任务，不做队列（并发跑会互抢接口配额，反而更慢）。
+- 选视频有两条路：系统文件对话框（直接拿路径，不复制）和浏览器选择（复制一份到 `_work/uploads`）。前者依赖 tkinter，打包版和部分精简 Python 没有，会自动退到后者，功能不受影响。
 - 台词按句归属到镜头，一句话只出现一次；后镜标"承上句"。
 - 环境音常常整片一致：底噪、观众声本来就贯穿全片，不是没分析。报告里会标明。
 - 远景下人物口型看不清，"对话"判不出来，会落到"画外解说"，需要人复核。
