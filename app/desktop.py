@@ -61,6 +61,8 @@ def run(port: int = 0, provider: str = "", log_file: Path = None) -> int:
         threading.Thread(target=srv.shutdown, daemon=True).start()
 
     window.events.closed += _stop
+    # 页面加载成功/失败都记一笔：打包后最常见的故障就是窗口起来但一片空白
+    window.events.loaded += lambda *a: print("[应用] 界面已加载")
     # 界面上的「退出」也走这里：关窗口，而不是只停服务
     srv.on_quit = window.destroy
 
