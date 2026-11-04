@@ -386,7 +386,8 @@ function epCard(ep){
   const name = el("input"); name.className = "ep-name"; name.value = ep.name || "default";
   name.title = "端点名字，模型那几行的下拉用它";
   name.oninput = () => syncRoleOptions();
-  const type = el("select");
+  const type = el("select"); type.className = "ep-type";
+  type.title = "端点类型：OpenAI 兼容 / 阿里云百炼";
   EP_TYPES.forEach(([v,label]) => { const o = el("option",null,label); o.value = v; type.append(o); });
   type.value = ep.type || "compat";
   const eye = el("button","btn ghost sm","显示");
@@ -482,12 +483,14 @@ function cfgBody(){
   // 端点：name / type / 地址 / 密钥。密钥空着表示"不修改"，后端会沿用上次的值
   const eps = {};
   $$(".epcard").forEach(card => {
-    const name = card.querySelector(".ep-name").value.trim();
+    // 元素缺失不该让整次保存崩掉：取不到就按空值处理，缺什么后端会报什么
+    const val = sel => { const x = card.querySelector(sel); return x ? String(x.value || "").trim() : ""; };
+    const name = val(".ep-name");
     if(!name) return;
     const raw = card._raw || {};
-    const o = { type: card.querySelector(".ep-type").value,
-                base_url: card.querySelector(".ep-base").value.trim() };
-    const k = card.querySelector(".ep-key").value.trim();
+    const o = { type: val(".ep-type") || raw.type || "compat",
+                base_url: val(".ep-base") };
+    const k = val(".ep-key");
     if(k) o.api_key = k;
     ["api_key_env","base_url_env","asr_base_url"].forEach(f => { if(raw[f]) o[f] = raw[f]; });
     eps[name] = o;
