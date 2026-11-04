@@ -63,6 +63,10 @@ class Job:
             self.full_path = ""
             self.report_path = ""
             self.shots = 0
+            # 中间结果：切完镜先把清单摆出来，之后逐镜回填，界面能边跑边看
+            self.plan = []              # [{id,start,end,dur}]
+            self.seen = {}              # shot_id -> {id,size,move,content,review,error}
+            self.counts = {"asr": 0, "sed": 0, "music": 0}
 
     def snapshot(self) -> dict:
         with self.lock:
@@ -75,6 +79,10 @@ class Job:
                 "has_report": bool(self.report_path and Path(self.report_path).exists()),
                 "has_form": bool(self.form_path and Path(self.form_path).exists()),
                 "log": self.log[-200:],
+                # 过程结果：已切出的镜头 + 已回填的单镜结论 + 声音侧计数
+                "plan": self.plan,
+                "seen": list(self.seen.values()),
+                "counts": dict(self.counts),
             }
 
     def push(self, line: str):
@@ -88,6 +96,14 @@ class Job:
             self.stage = e.get("stage", self.stage)
             self.progress = float(e.get("progress", self.progress))
             self.detail = e.get("detail", self.detail)
+            if e.get("shots"):
+                self.plan = list(e["shots"])
+            shot = e.get("shot")
+            if isinstance(shot, dict) and shot.get("id"):
+                self.seen[shot["id"]] = shot     # 同一镜补跑会覆盖，不重复
+            if isinstance(e.get("audio"), dict):
+                for k, v in e["audio"].items():
+                    self.counts[k] = int(v or 0)
 
 
 class _Tee(io.TextIOBase):
@@ -277,6 +293,14 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/log":
             return self._send(200, "\n".join(self.server.job.snapshot()["log"]).encode(),
                               "text/plain; charset=utf-8")
+        if u.path == "/api/history":
+            return self._json(self._history())
+        if u.path == "/api/history/report":
+            return self._hist_report(q)
+        if u.path == "/api/history/form":
+            return self._hist_form(q)
+        if u.path == "/api/history/media":
+            return self._hist_media(q)
         return self._json({"error": "not found"}, 404)
 
     def do_POST(self):
@@ -299,6 +323,8 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/prompt-check":
             name = (self._body() or {}).get("name", "vl")
             return self._json({"name": name, "problems": check_prompt(name)})
+        if u.path == "/api/history/delete":
+            return self._hist_delete(self._body())
         return self._json({"error": "not found"}, 404)
 
     def do_PUT(self):
@@ -498,17 +524,17 @@ class Handler(BaseHTTPRequestHandler):
         t.start()
         return self._json({"ok": True, "id": job.id})
 
-    def _report(self):
+    def _report(self, path: str = ""):
         job: Job = self.server.job
-        p = job.report_path
+        p = path or job.report_path
         if not p or not Path(p).exists():
             return self._send(404, b"<h1>\xe8\xbf\x98\xe6\xb2\xa1\xe6\x9c\x89\xe6\x8a\xa5\xe5\x91\x8a</h1>",
                               "text/html; charset=utf-8")
         return self._send(200, Path(p).read_bytes(), "text/html; charset=utf-8")
 
-    def _form(self):
+    def _form(self, path: str = ""):
         job: Job = self.server.job
-        p = job.form_path
+        p = path or job.form_path
         if not p or not Path(p).exists():
             return self._json({"error": "还没有结果"}, 404)
         data = Path(p).read_bytes()
@@ -520,10 +546,150 @@ class Handler(BaseHTTPRequestHandler):
             "Content-Disposition": f"attachment; filename*=UTF-8''{name}"})
         return None
 
-    def _media(self):
+    # ---------- 历史分析 ----------
+    # 每次跑完都会在 _work/app_state.json 里记一条（最多 20 条）。
+    # 这里把它变成可浏览、可删除的列表：报告、原片、表单都能重新打开。
+    @staticmethod
+    def _hist_raw() -> list:
+        try:
+            return json.loads(STATE.read_text(encoding="utf-8")) if STATE.exists() else []
+        except Exception:
+            return []
+
+    def _history(self) -> dict:
+        """全部已分析的视频，不只是应用记录的。
+
+        应用只记得自己跑过的那些；输出目录里可能还有命令行或旧版本留下的报告。
+        两边合起来按时间倒序，才叫"全部"。
+        """
+        try:
+            out = resolve_path(load_config(CFG_DEFAULT)["paths"]["output"])
+        except Exception:
+            out = DATA / "output"
+        items, known = [], set()
+        for h in self._hist_raw():
+            rep = Path(h.get("report") or "")
+            if not rep.name or not rep.exists():
+                continue            # 报告文件被删了就不摆出来，点开会是空页
+            known.add(rep.name)
+            video = h.get("video") or ""
+            form = Path(h.get("form") or "")
+            items.append({
+                "file": rep.name,
+                "at": h.get("at") or "",
+                "shots": h.get("shots") or None,
+                "status": h.get("status") or "",
+                "video": video,
+                "video_name": Path(video).name if video else "",
+                "has_video": bool(video and Path(video).exists()),
+                "has_form": bool(form.name and form.exists()),
+                "size": rep.stat().st_size,
+                "mtime": rep.stat().st_mtime,
+            })
+        if out.exists():
+            ups = DATA / "_work" / "uploads"
+            for p in out.glob("*_report.html"):
+                if p.name in known:
+                    continue
+                stem = p.name[:-len("_report.html")]
+                vid = next((q for q in ups.glob(stem + ".*")), None) if ups.exists() else None
+                full = p.with_name(stem + "_full.json")
+                n = None
+                if full.exists() and full.stat().st_size < (4 << 20):
+                    try:
+                        n = len(json.loads(full.read_text(encoding="utf-8")).get("shots") or [])
+                    except Exception:
+                        n = None
+                items.append({
+                    "file": p.name, "at": "",
+                    "shots": n, "status": "done",
+                    "video": str(vid) if vid else "",
+                    "video_name": vid.name if vid else "",
+                    "has_video": bool(vid),
+                    "has_form": p.with_name(stem + "_form.json").exists(),
+                    "size": p.stat().st_size,
+                    "mtime": p.stat().st_mtime,
+                })
+        items.sort(key=lambda x: x.get("mtime") or 0, reverse=True)
+        for x in items:
+            x.pop("mtime", None)
+            if x["at"]:
+                continue
+            # 文件名里带 MMDD-HHMMSS，命令行或旧版本留下的记录靠它还原时间
+            m = re.search(r"_(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})_report\.html$", x["file"])
+            x["at"] = (f"{time.strftime('%Y')}-{m.group(1)}-{m.group(2)} "
+                       f"{m.group(3)}:{m.group(4)}") if m else ""
+        return {"items": items}
+
+    def _hist_entry(self, name: str):
+        name = Path(name or "").name
+        if not name:
+            return None
+        return next((h for h in self._hist_raw()
+                     if Path(h.get("report") or "").name == name), None)
+
+    def _hist_report(self, q):
+        p = Path((self._hist_entry((q.get("f") or [""])[0]) or {}).get("report") or "")
+        if not p.name or not p.exists():
+            return self._send(404, b"<h1>\xe6\x8a\xa5\xe5\x91\x8a\xe4\xb8\x8d\xe5\xad\x98\xe5\x9c\xa8</h1>",
+                              "text/html; charset=utf-8")
+        return self._report(str(p))
+
+    def _hist_form(self, q):
+        h = self._hist_entry((q.get("f") or [""])[0]) or {}
+        p = Path(h.get("form") or "")
+        if not p.name or not p.exists():
+            return self._json({"error": "这次运行没有留下表单文件"}, 404)
+        return self._form(str(p))
+
+    def _hist_media(self, q):
+        h = self._hist_entry((q.get("f") or [""])[0]) or {}
+        video = h.get("video") or ""
+        if not video or not Path(video).exists():
+            return self._json({"error": "原视频已经不在了（可能被移动或删除）"}, 404)
+        return self._media(video)
+
+    def _hist_delete(self, body: dict):
+        """删一条历史，连同这次运行生成的报告/表单/完整 JSON。
+
+        不动原视频：那可能是用户自己的文件，只是被引用，删了会误伤。
+        """
+        name = Path((body.get("f") or "")).name
+        if not name:
+            return self._json({"error": "缺少 f 参数"}, 400)
+        entries = self._hist_raw()
+        target = next((h for h in entries if Path(h.get("report") or "").name == name), None)
+        if not target:
+            return self._json({"error": "没有这条记录"}, 404)
+        keep = [h for h in entries if Path(h.get("report") or "").name != name]
+        removed = []
+        cand = []
+        for key in ("report", "form"):
+            if target.get(key):
+                cand.append(Path(target[key]))
+        rep = Path(target.get("report") or "")
+        if rep.name.endswith("_report.html"):
+            stem = rep.name[:-len("_report.html")]
+            cand.append(rep.with_name(stem + "_full.json"))
+            cand.append(rep.with_name(stem + "_form.json"))
+        for p in cand:
+            try:
+                if p.name and p.exists():
+                    p.unlink()
+                    removed.append(p.name)
+            except Exception as e:
+                return self._json({"error": f"文件删不掉（{p.name}）：{type(e).__name__}: {e}"}, 500)
+        try:
+            STATE.parent.mkdir(parents=True, exist_ok=True)
+            STATE.write_text(json.dumps(keep, ensure_ascii=False, indent=1), encoding="utf-8")
+        except Exception as e:
+            return self._json({"error": f"记录写不回去：{type(e).__name__}: {e}"}, 500)
+        return self._json({"ok": True, "removed": removed})
+
+    def _media(self, src: str = ""):
         """视频流。支持 Range，否则浏览器不能拖动进度条。"""
         job: Job = self.server.job
-        src = job.video
+        src = src or job.video
         if not src or not Path(src).exists():
             return self._json({"error": "没有视频"}, 404)
         path = Path(src)
@@ -636,11 +802,13 @@ def _save_history(job: Job):
         STATE.parent.mkdir(parents=True, exist_ok=True)
         hist = json.loads(STATE.read_text(encoding="utf-8")) if STATE.exists() else []
         if job.video:
-            hist = [h for h in hist if h.get("video") != job.video]
-            hist.insert(0, {"video": job.video, "at": time.strftime("%Y-%m-%d %H:%M"),
-                            "report": job.report_path, "form": job.form_path,
-                            "shots": job.shots, "status": job.status})
-        STATE.write_text(json.dumps(hist[:20], ensure_ascii=False, indent=1), encoding="utf-8")
+            # 同一个视频反复跑也是各自一条：这份记录就是"分析过哪些"，不能互相覆盖
+            entry = {"video": job.video, "at": time.strftime("%Y-%m-%d %H:%M"),
+                     "report": job.report_path, "form": job.form_path,
+                     "shots": job.shots, "status": job.status}
+            hist = [h for h in hist if h.get("report") != job.report_path or not job.report_path]
+            hist.insert(0, entry)
+        STATE.write_text(json.dumps(hist[:50], ensure_ascii=False, indent=1), encoding="utf-8")
     except Exception:
         pass
 

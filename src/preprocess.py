@@ -335,17 +335,37 @@ def extract_audio_chunks(video: str, cfg: dict, workdir: Path) -> List[dict]:
 
 # ---------- 总入口 ----------
 
-def preprocess(video: str, cfg: dict, workdir: Path) -> Tuple[List[Shot], float, List[dict]]:
+def preprocess(video: str, cfg: dict, workdir: Path,
+               on_step=None) -> Tuple[List[Shot], float, List[dict]]:
+    """切镜、抽帧、抽音轨、测运镜。
+
+    on_step(msg, frac) 是可选的进度回调：这一段全是本机 ffmpeg，耗时几十秒，
+    界面不报点东西就只能盯着一个不动的百分比。frac 是 0–1 的本阶段进度。
+    """
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
+
+    def step(msg: str, frac: float):
+        if on_step:
+            try:
+                on_step(msg, max(0.0, min(1.0, frac)))
+            except Exception:
+                pass
+
+    step("读取时长与分辨率", 0.02)
     duration = ffprobe_duration(video)
+    step("扫描切点（ffmpeg 逐帧比对，较慢）", 0.10)
     shots = split_shots(video, cfg)
+    step(f"切出 {len(shots)} 个镜头，抽取关键帧", 0.45)
     extract_keyframes(video, shots, cfg, workdir)
+    step("抽取音轨", 0.65)
     audio_chunks = extract_audio_chunks(video, cfg, workdir)
 
     # CPU 运镜测量（不加云成本，结果作为 VL 的判据）
     src_w, src_h = ffprobe_size(video)
-    for s in shots:
+    total = max(1, len(shots))
+    for i, s in enumerate(shots):
+        step(f"测量运镜 {i + 1}/{total}", 0.7 + 0.3 * i / total)
         try:
             s.motion = measure_shot(video, s, cfg, workdir, src_w, src_h)
         except Exception:

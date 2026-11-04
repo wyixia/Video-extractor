@@ -34,12 +34,33 @@ class Pipeline:
         # 进度回调：图形界面靠它显示阶段与剩余量。不传就是空函数，行为与原来一致。
         self.on_event = on_event or (lambda e: None)
 
-    def _emit(self, stage: str, progress: float, detail: str = ""):
+    def _emit(self, stage: str, progress: float, detail: str = "", **extra):
+        """上报进度。extra 用来夹带中间结果（镜头清单、单镜结论），界面据此边跑边显示。
+
+        回调出问题不能影响标注本身，所以整段吞掉异常。
+        """
         try:
-            self.on_event({"stage": stage, "progress": round(min(1.0, progress), 3),
-                           "detail": detail})
+            e = {"stage": stage, "progress": round(min(1.0, progress), 3), "detail": detail}
+            if extra:
+                e.update(extra)
+            self.on_event(e)
         except Exception:
-            pass  # 界面出错不能影响标注本身
+            pass
+
+    @staticmethod
+    def _shot_brief(v: dict) -> dict:
+        """单镜结果的精简版：够界面显示一行，不搬整段正文。"""
+        content = (v.get("content_info") or "").strip()
+        if len(content) > 110:
+            content = content[:110] + "…"
+        return {
+            "id": v.get("shot_id") or "",
+            "size": v.get("shot_size") or "",
+            "move": v.get("camera_movement") or "",
+            "content": content,
+            "review": bool(v.get("needs_review")),
+            "error": str(v.get("error") or "")[:120],
+        }
 
     def run(self, video: str, subtask_id: str = "") -> dict:
         video = str(video)
@@ -47,8 +68,16 @@ class Pipeline:
 
         # ---- P0 预处理 ----
         self._emit("preprocess", 0.02, "读取时长、切分镜头")
-        shots, duration, audio_chunks = preprocess(video, self.cfg, workdir)
-        self._emit("preprocess", 0.15, f"{len(shots)} 个镜头，{duration:.1f} 秒")
+        shots, duration, audio_chunks = preprocess(
+            video, self.cfg, workdir,
+            # 预处理全在本机跑，几十秒没有动静；把内部进度换算到 0.02–0.15 这一段
+            on_step=lambda msg, frac: self._emit("preprocess", 0.02 + 0.13 * frac, msg))
+        # 先把镜头清单交出去：界面可以立刻把每一行摆出来，后面逐条填结果
+        self._emit("preprocess", 0.15, f"{len(shots)} 个镜头，{duration:.1f} 秒",
+                   shots=[{"id": sh.shot_id,
+                           "start": sh.start_ms, "end": sh.end_ms,
+                           "dur": round((sh.end_ms - sh.start_ms) / 1000.0, 2)}
+                          for sh in shots])
 
         # ---- P1 并行 ----
         # 分工原则：台词逐镜头切（转写必须能对齐到镜头边界）；
@@ -77,21 +106,26 @@ class Pipeline:
             for fut in as_completed(jobs):
                 done_jobs += 1
                 kind, key = jobs[fut]
-                self._emit("analyze", 0.15 + 0.65 * done_jobs / total_jobs,
-                           f"画面与声音识别 {done_jobs}/{total_jobs}")
+                prog = 0.15 + 0.65 * done_jobs / total_jobs
                 try:
                     res = fut.result()
                 except Exception:
                     res = None
 
                 if kind == "vl":
-                    raw["vl"].append(res if res
-                                     else self._degrade(("vl", key), Exception("missing")))
+                    v = res if res else self._degrade(("vl", key), Exception("missing"))
+                    raw["vl"].append(v)
+                    # 单镜结果一到就发：界面按 id 把那一行填上，不用等全片跑完
+                    self._emit("analyze", prog, f"识别画面与声音 {done_jobs}/{total_jobs}",
+                               shot=self._shot_brief(v))
                 else:
                     ch = audio_chunks[key]
                     if not res:
                         if sk["sed"]["enabled"]:
                             sed_failed = True
+                        self._emit("analyze", prog, f"识别画面与声音 {done_jobs}/{total_jobs}",
+                                   audio={"asr": len(asr_segs), "sed": len(sed_events),
+                                          "music": sum(1 for _, m in music_parts if m.get("present"))})
                         continue
                     off = int(ch["start_ms"])
                     asr = res.get("asr")
@@ -113,6 +147,9 @@ class Pipeline:
                     mus = res.get("music")
                     if mus:
                         music_parts.append((off, mus))
+                    self._emit("analyze", prog, f"识别画面与声音 {done_jobs}/{total_jobs}",
+                               audio={"asr": len(asr_segs), "sed": len(sed_events),
+                                      "music": sum(1 for _, m in music_parts if m.get("present"))})
 
         for sh in shots:
             raw["audio"].setdefault(sh.shot_id, {})
@@ -143,6 +180,8 @@ class Pipeline:
                 raw["vl"] = [x for x in raw["vl"]
                              if not (isinstance(x, dict) and x.get("shot_id") == sh.shot_id)]
                 raw["vl"].append(new_v)
+                self._emit("repair", 0.82, f"补跑 {sh.shot_id} 成功",
+                           shot=self._shot_brief(new_v))
 
         if (asr_failed or sed_failed) and audio_chunks:
             r_asr: List[dict] = []

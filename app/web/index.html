@@ -151,6 +151,37 @@ video{width:100%;border-radius:12px;background:#000;display:block;max-height:300
 .epstate .tag.env{background:#12233d;color:#79b8ff;border-color:#1d3a5f}
 .epstate .tag.bad{background:#3a1a1a;color:#ff9a9a;border-color:#5a2626}
 .mrow select{font-size:12px}
+
+/* 过程结果：边跑边把每个镜头填进来 */
+.live{margin-top:16px}
+.live-head{display:flex;justify-content:space-between;align-items:baseline;
+  font-size:12.5px;color:var(--dim);margin-bottom:8px}
+.live-head b{color:var(--text);font-weight:500;font-size:13px}
+.lvwrap{max-height:250px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+.lv{display:grid;grid-template-columns:56px 56px 1fr 78px;gap:10px;padding:7px 12px;
+  font-size:12px;border-top:1px solid var(--line);align-items:start}
+.lv:first-child{border-top:none}
+.lv .k{color:var(--faint)}
+.lv .d{color:var(--dim);white-space:nowrap}
+.lv .c{color:var(--text);line-height:1.55}
+.lv .s{text-align:right;font-size:11.5px;color:var(--faint)}
+.lv.wait .c{color:var(--faint)}
+.lv.done .s{color:var(--ok)}
+.lv.bad .s{color:var(--err)}
+.lv.bad .c{color:var(--err)}
+
+/* 历史分析 */
+.hint-row{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.hlist{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:10px}
+.hlist:empty{display:none}
+.hist-item{display:grid;grid-template-columns:1fr auto;gap:10px;padding:9px 12px;
+  border-top:1px solid var(--line);align-items:center}
+.hist-item:first-child{border-top:none}
+.hist-main{cursor:pointer;min-width:0}
+.hist-main:hover .hist-title{color:#8ab4ff}
+.hist-title{font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.hist-meta{font-size:11.5px;color:var(--faint);margin-top:3px}
 @media(max-width:980px){
   #stage-pick,.done-grid{grid-template-columns:1fr}
   .player{position:static}
@@ -251,6 +282,17 @@ video{width:100%;border-radius:12px;background:#000;display:block;max-height:300
         <span class="hint" id="saveHint"></span>
       </div>
     </div>
+
+    <div class="card" id="histCard" style="grid-column:1/-1">
+      <div class="hint-row">
+        <div>
+          <h1 style="font-size:14px;margin:0">历史分析</h1>
+          <p class="hint" id="histHint" style="margin:5px 0 0">正在读取…</p>
+        </div>
+        <button class="btn ghost sm" id="histRefresh">刷新</button>
+      </div>
+      <div class="hlist" id="histList"></div>
+    </div>
   </section>
 
   <!-- 2. 运行 -->
@@ -263,6 +305,15 @@ video{width:100%;border-radius:12px;background:#000;display:block;max-height:300
       <p class="hint" id="runDetail">准备中…</p>
       <div class="bar"><i id="runBar"></i></div>
       <div class="stages" id="stages"></div>
+
+      <div class="live">
+        <div class="live-head">
+          <b>过程结果</b>
+          <span id="liveSum">等待切镜…</span>
+        </div>
+        <div class="lvwrap" id="liveBox"></div>
+      </div>
+
       <div class="log" id="log">等待开始…</div>
     </div>
   </section>
@@ -278,8 +329,9 @@ video{width:100%;border-radius:12px;background:#000;display:block;max-height:300
           <dt>文件</dt><dd id="d-file" class="mono" style="word-break:break-all">—</dd>
         </dl>
         <div class="row" style="margin-top:14px">
-          <a class="btn sm" href="/api/form" download>下载表单 JSON</a>
-          <a class="btn ghost sm" href="/api/report" target="_blank">单独打开报告</a>
+          <a class="btn sm" id="dlForm" href="/api/form" download>下载表单 JSON</a>
+          <a class="btn ghost sm" id="openReport" href="/api/report" target="_blank">单独打开报告</a>
+          <button class="btn ghost sm" id="backPick">返回 / 历史</button>
           <button class="btn ghost sm" id="again">再标一个</button>
         </div>
         <div class="errbox" id="errBox"></div>
@@ -657,6 +709,10 @@ function showRun(){
   $("#stage-run").style.display = "block";
   $("#runBar").style.width = "0%"; $("#runPct").textContent = "0%";
   $("#log").textContent = "";
+  liveSig = "";                       // 新一轮开始，过程结果表要重新填
+  const lv = $("#liveBox"); if(lv) lv.innerHTML = "";
+  const ls = $("#liveSum"); if(ls) ls.textContent = "等待切镜…";
+  lastLogLen = 0;
   const box = $("#stages"); box.innerHTML = "";
   STAGES.forEach(([k,label]) => { const d = el("span","st",label); d.dataset.k = k; box.append(d); });
 }
@@ -682,6 +738,51 @@ function paintState(s){
     stopPoll();
     paintError(s.error || "未知错误");
   }
+  paintLive(s);
+}
+
+/* ---------- 过程结果：每出来一个镜头就填一行 ---------- */
+let liveSig = "";
+function paintLive(s){
+  const plan = s.plan || [];
+  const seen = {};
+  (s.seen || []).forEach(x => { if(x && x.id) seen[x.id] = x; });
+  const c = s.counts || {};
+  const sum = $("#liveSum");
+  if(sum){
+    sum.textContent = (plan.length || Object.keys(seen).length)
+      ? `台词 ${c.asr || 0} 句 · 环境音 ${c.sed || 0} 条 · 音乐 ${c.music ? "有" : "无或未识别"}`
+      : "等待切镜…";
+  }
+  const box = $("#liveBox");
+  if(!box) return;
+  const ids = plan.length ? plan.map(p => p.id) : Object.keys(seen);
+  // 轮询每 0.9 秒一次，内容没变就不重建，避免滚动条和选中状态被打断
+  const sig = ids.length
+    ? ids.join(",") + "|" + ids.map(id => (seen[id] ? (seen[id].review ? "r" : "k") : "-")).join("")
+    : "pre|" + (s.detail || "");
+  if(sig === liveSig) return;
+  liveSig = sig;
+  const top = box.scrollTop;
+  box.innerHTML = "";
+  if(!ids.length){
+    // 还没切完镜：把当前在做什么说出来，别让人盯着一个不动的百分比
+    const d = el("div","hint", s.detail || "准备中…");
+    d.style.padding = "10px 12px";
+    box.append(d);
+    return;
+  }
+  ids.forEach(id => {
+    const p = plan.find(x => x.id === id) || {};
+    const v = seen[id];
+    const row = el("div","lv " + (v ? (v.review ? "bad" : "done") : "wait"));
+    row.append(el("span","k", id));
+    row.append(el("span","d", p.dur != null ? p.dur.toFixed(2) + "s" : "—"));
+    row.append(el("span","c", v ? (v.content || v.error || "（无内容）") : "等待识别…"));
+    row.append(el("span","s", v ? (v.review ? "需复核" : (v.size || "完成")) : "…"));
+    box.append(row);
+  });
+  box.scrollTop = top;
 }
 
 /* 失败要把"下一步该做什么"说出来，只给一句异常等于把问题丢回给用户 */
@@ -729,18 +830,100 @@ async function tick(){
 function startPoll(){ stopPoll(); tick(); pollTimer = setInterval(tick, 900); }
 function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer = null; } }
 
-function showDone(s){
+function showDone(s, hist){
   $("#stage-pick").style.display = "none";
   $("#stage-run").style.display = "none";
   $("#stage-done").style.display = "block";
-  $("#v").src = "/api/media?t=" + Date.now();
-  $("#report").src = "/api/report?t=" + Date.now();
-  $("#d-shots").textContent = (s.shots || 0) + " 个镜头";
-  $("#d-time").textContent = (s.elapsed || 0) + " 秒";
-  $("#d-file").textContent = s.video || "";
+  // hist 有值说明是在看历史记录：报告/视频/表单都从历史接口取
+  const q = hist ? "?f=" + encodeURIComponent(hist.file) : "";
+  const hasVideo = hist ? !!hist.has_video : true;
+  if(hist && !hasVideo){ $("#v").removeAttribute("src"); $("#v").load(); }
+  else $("#v").src = hist ? "/api/history/media" + q : "/api/media?t=" + Date.now();
+  $("#v").style.display = hasVideo ? "" : "none";
+  $("#report").src = hist ? "/api/history/report" + q : "/api/report?t=" + Date.now();
+  $("#d-shots").textContent = s.shots != null ? s.shots + " 个镜头" : "—";
+  $("#d-time").textContent = hist ? "—" : (s.elapsed || 0) + " 秒";
+  $("#d-file").textContent = hist ? (hist.video_name || "原视频已不在")
+                                  : (s.video || "");
+  $("#dlForm").href = hist ? "/api/history/form" + q : "/api/form";
+  $("#dlForm").style.display = (!hist || hist.has_form) ? "" : "none";
+  $("#openReport").href = hist ? "/api/history/report" + q : "/api/report";
   $("#again").onclick = () => { location.reload(); };
   $("#start").disabled = false;
+  loadHistory();          // 跑完就把这条新记录带进列表
 }
+
+/* ---------- 历史分析 ---------- */
+async function loadHistory(){
+  const box = $("#histList"), hint = $("#histHint");
+  if(!box) return;
+  try{
+    const h = await api("/api/history");
+    const items = h.items || [];
+    box.innerHTML = "";
+    if(!items.length){
+      hint.textContent = "还没有分析记录。跑完一个视频，它就会出现在这里。";
+      return;
+    }
+    hint.textContent = `共 ${items.length} 条。点标题重新打开那次的分析；删除只清掉这次生成的报告和表单，原视频不动。`;
+    const frag = document.createDocumentFragment();
+    items.forEach(it => frag.append(histRow(it)));
+    box.append(frag);
+  }catch(e){ hint.textContent = "读取历史失败：" + e.message; }
+}
+function histRow(it){
+  const row = el("div","hist-item");
+  const main = el("div","hist-main");
+  const title = el("div","hist-title", it.file.replace(/_report\.html$/, ""));
+  title.title = "点击打开这次分析";
+  const bits = [it.at || "时间未知"];
+  if(it.shots != null) bits.push(it.shots + " 个镜头");
+  bits.push(it.video_name || "原视频已不在");
+  const meta = el("div","hist-meta", bits.join(" · "));
+  main.append(title, meta);
+  main.onclick = () => openHistory(it);
+
+  const del = el("button","btn ghost sm","删除");
+  del.title = "点一下进入确认，再点一下真正删除";
+  // 不用 window.confirm：桌面窗口（webview）里原生对话框经常被抑制，
+  // 删除会变成点了没反应。改成按钮内两步确认，哪里都能用。
+  let armed = false, timer = null;
+  del.onclick = async ev => {
+    ev.stopPropagation();
+    if(!armed){
+      armed = true;
+      del.textContent = "确认删除";
+      del.style.color = "var(--err)";
+      del.style.borderColor = "var(--err)";
+      timer = setTimeout(() => {
+        armed = false; del.textContent = "删除";
+        del.style.color = ""; del.style.borderColor = "";
+      }, 3000);
+      return;
+    }
+    clearTimeout(timer);
+    del.disabled = true; del.textContent = "删除中…";
+    try{
+      await api("/api/history/delete",{method:"POST",
+        headers:{"Content-Type":"application/json"}, body:JSON.stringify({f:it.file})});
+      toast("已删除");
+      loadHistory();
+    }catch(e){
+      del.disabled = false; del.textContent = "删除";
+      del.style.color = ""; del.style.borderColor = "";
+      armed = false;
+      toast("删除失败：" + e.message);
+    }
+  };
+  row.append(main, del);
+  return row;
+}
+function openHistory(it){
+  stopPoll();
+  showDone({shots: it.shots, elapsed: 0}, it);
+}
+$("#histRefresh").onclick = () => loadHistory();
+$("#backPick").onclick = () => { backToPick(); loadHistory(); };
 
 /* ---------- 提示词 ---------- */
 async function loadPrompt(name){
@@ -796,6 +979,7 @@ $("#quitApp").onclick = async () => {
 };
 
 loadCfg();
+loadHistory();
 tick();
 </script>
 </body>
