@@ -137,11 +137,19 @@ def _save_local_config(values: dict) -> Path:
     return p
 
 
-def _pick_video_dialog() -> str:
-    """系统文件对话框。tkinter 在请求线程里创建，串行调用不会冲突。"""
+def _pick_video_dialog() -> dict:
+    """系统文件对话框。返回 {"available": bool, "path": str, "reason": str}。
+
+    不用异常表达"这台机器没有对话框"：tkinter 不是标准库必装项，
+    精简版 Python、打包运行时、Linux 上没装 python3-tk 都会缺，
+    这属于正常情况，前端应当退回浏览器自带的文件选择而不是弹错误。
+    """
     try:
         import tkinter as tk
         from tkinter import filedialog
+    except Exception as e:
+        return {"available": False, "reason": f"{type(e).__name__}: {e}"}
+    try:
         root = tk.Tk()
         root.withdraw()
         root.attributes("-topmost", True)
@@ -150,9 +158,9 @@ def _pick_video_dialog() -> str:
             filetypes=[("视频文件", "*.mp4 *.mov *.mkv *.avi *.webm *.m4v"), ("全部文件", "*.*")],
         )
         root.destroy()
-        return path or ""
     except Exception as e:
-        raise RuntimeError(f"打不开文件对话框：{type(e).__name__}: {e}")
+        return {"available": False, "reason": f"{type(e).__name__}: {e}"}
+    return {"available": True, "path": path or ""}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -211,11 +219,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path)
         if u.path == "/api/pick-video":
-            try:
-                p = _pick_video_dialog()
-                return self._json({"path": p})
-            except Exception as e:
-                return self._json({"error": str(e)}, 500)
+            return self._json(_pick_video_dialog())
         if u.path == "/api/start":
             return self._start(self._body())
         if u.path == "/api/config":

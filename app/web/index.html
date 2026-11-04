@@ -138,6 +138,7 @@ video{width:100%;border-radius:12px;background:#000;display:block;max-height:300
         </svg>
         <div class="big">把视频拖到这里，或</div>
         <button class="btn" id="pick">选择视频文件</button>
+        <input type="file" id="fileInput" accept="video/*,.mkv,.m4v" hidden>
         <div class="hint" style="margin-top:10px">拖入会复制一份到工作目录</div>
       </div>
       <div class="file" id="fileBox"></div>
@@ -339,9 +340,29 @@ $$(".tab").forEach(t => t.onclick = () => {
 $("#pick").onclick = async () => {
   try{
     const r = await api("/api/pick-video",{method:"POST"});
+    // 系统对话框要 tkinter，精简 Python / 打包运行时可能没有。
+    // 这不是错误，退回浏览器自带的文件选择即可。
+    if(r.available === false){
+      toast("这台机器没有系统文件对话框，改用浏览器选择");
+      $("#fileInput").click();
+      return;
+    }
     if(r.path) setVideo(r.path);
-  }catch(e){ toast(e.message); }
+  }catch(e){ $("#fileInput").click(); }
 };
+$("#fileInput").onchange = e => {
+  const f = e.target.files[0];
+  if(f) uploadFile(f);
+  e.target.value = "";   // 允许再次选同一个文件
+};
+async function uploadFile(f){
+  toast("正在复制视频…", 5000);
+  try{
+    const r = await api("/api/upload?name=" + encodeURIComponent(f.name),
+      {method:"PUT", body:f});
+    setVideo(r.path); toast("已就绪");
+  }catch(err){ toast("上传失败：" + err.message); }
+}
 function setVideo(p){
   video = p;
   const box = $("#fileBox");
@@ -358,14 +379,9 @@ const drop = $("#drop");
 ["dragleave","drop"].forEach(k => drop.addEventListener(k, e => {
   e.preventDefault(); drop.classList.remove("hot");
 }));
-drop.addEventListener("drop", async e => {
+drop.addEventListener("drop", e => {
   const f = e.dataTransfer.files[0]; if(!f) return;
-  toast("正在复制视频…", 5000);
-  try{
-    const r = await api("/api/upload?name=" + encodeURIComponent(f.name),
-      {method:"PUT", body:f});
-    setVideo(r.path); toast("已就绪");
-  }catch(err){ toast("上传失败：" + err.message); }
+  uploadFile(f);
 });
 
 /* ---------- 运行 ---------- */
