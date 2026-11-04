@@ -145,25 +145,23 @@ def check_role(client, cfg, role: str, model: str, tmp: Path) -> dict:
     return out
 
 
-def run_check(cfg: dict, roles=None, quiet: bool = False) -> int:
-    """跑一轮实测，返回 0=可用 / 1=有不可用 / 2=参数错。供 run.py 复用。"""
+def collect(cfg: dict, roles=None) -> tuple:
+    """跑一轮实测，返回 (results, fatal)。
+
+    fatal 非空表示连客户端都没建起来（缺密钥/缺地址），此时 results 为空。
+    与 run_check 分开是为了让界面能拿到结构化结果，不用去解析打印文本。
+    """
     models = cfg.get("models") or {}
     roles = roles or list(ROLES)
     unknown = [r for r in roles if r not in ROLES]
     if unknown:
-        print(f"未知角色：{unknown}，可选：{list(ROLES)}")
-        return 2
+        return [], f"未知角色：{unknown}，可选：{list(ROLES)}"
 
     try:
         client = build_client(cfg)
     except Exception as e:
-        print(f"客户端初始化失败：{type(e).__name__}: {e}")
-        print("先跑 python tools/doctor.py 看环境与凭据。")
-        return 1
+        return [], f"{type(e).__name__}: {e}"
 
-    if not quiet:
-        print(f"模型实测（provider={cfg.get('provider')}）")
-        print("-" * 62)
     results = []
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
@@ -173,17 +171,31 @@ def run_check(cfg: dict, roles=None, quiet: bool = False) -> int:
                 results.append({"role": role, "model": "-", "status": FAIL,
                                 "detail": "配置里没有该角色的模型名", "desc": ROLES[role][2]})
                 continue
-            if not quiet:
-                print(f"  测试 {role:<8} {model} …", end="", flush=True)
-            r = check_role(client, cfg, role, model, tmp)
-            results.append(r)
-            if not quiet:
-                print(f" {r['status']}")
+            results.append(check_role(client, cfg, role, model, tmp))
+    return results, ""
+
+
+def run_check(cfg: dict, roles=None, quiet: bool = False) -> int:
+    """跑一轮实测，返回 0=可用 / 1=有不可用 / 2=参数错。供 run.py 复用。"""
+    roles = roles or list(ROLES)
+    unknown = [r for r in roles if r not in ROLES]
+    if unknown:
+        print(f"未知角色：{unknown}，可选：{list(ROLES)}")
+        return 2
 
     if not quiet:
+        print(f"模型实测（provider={cfg.get('provider')}）")
         print("-" * 62)
-    for r in results:
-        print(f" {r['status']:<4} {r['role']:<9} {r['model']:<28} {r['detail']}")
+    results, fatal = collect(cfg, roles)
+    if fatal:
+        print(f"客户端初始化失败：{fatal}")
+        print("先跑 python tools/doctor.py 看环境与凭据。")
+        return 1
+
+    if not quiet:
+        for r in results:
+            print(f" {r['status']:<4} {r['role']:<9} {r['model']:<28} {r['detail']}")
+        print("-" * 62)
 
     bad = [r for r in results if r["status"] == FAIL]
     warn = [r for r in results if r["status"] == WARN]

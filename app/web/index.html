@@ -113,6 +113,26 @@ video{width:100%;border-radius:12px;background:#000;display:block;max-height:300
   border:1px solid var(--line);padding:10px 18px;border-radius:10px;font-size:13px;
   opacity:0;transition:.25s;pointer-events:none;z-index:99}
 .toast.show{opacity:1}
+
+/* 挡住整个流程的问题（比如没配密钥）放顶部，点一下直接去改 */
+.banner{display:flex;gap:12px;align-items:center;background:rgba(210,153,34,.12);
+  border:1px solid rgba(210,153,34,.45);color:#f0c674;border-radius:10px;
+  padding:10px 14px;font-size:13px;margin-bottom:14px}
+.banner b{color:#ffd479}
+.banner .btn{margin-left:auto;background:var(--warn);color:#1a1a1a;font-weight:600;
+  padding:6px 12px;font-size:12.5px;flex:none}
+
+/* 模型实测结果 */
+.mtest{margin-top:12px;display:none}
+.mtest.show{display:block}
+.mres{display:grid;grid-template-columns:16px 66px 1fr;gap:8px;font-size:12.5px;
+  padding:7px 0;border-top:1px solid var(--line);align-items:start}
+.mres:first-of-type{border-top:none}
+.mres .nm{color:var(--dim)}
+.mres .dt{line-height:1.55}
+.keyrow{display:flex;gap:8px}
+.keyrow input{flex:1}
+.keyrow button{flex:none}
 @media(max-width:980px){
   #stage-pick,.done-grid{grid-template-columns:1fr}
   .player{position:static}
@@ -124,11 +144,16 @@ video{width:100%;border-radius:12px;background:#000;display:block;max-height:300
 <header>
   <div class="logo"><i></i>视频分镜标注</div>
   <div class="status" id="status"></div>
+  <button class="btn ghost sm" id="quitApp" title="关闭本地服务与这个页面">退出</button>
 </header>
 
 <main>
   <!-- 1. 选择 + 配置 -->
   <section id="stage-pick">
+    <div class="banner" id="keyBanner" style="grid-column:1/-1;display:none">
+      <span><b>还没配置 API Key</b>，现在点「开始标注」会直接被打回。</span>
+      <button class="btn" id="gotoKey">去配置</button>
+    </div>
     <div class="card">
       <h1>选择一个视频</h1>
       <p class="hint">支持 mp4 / mov / mkv / webm，建议 1–2 分钟。切分与抽帧在本机完成，画面和声音只送给你配置的模型。</p>
@@ -169,7 +194,19 @@ video{width:100%;border-radius:12px;background:#000;display:block;max-height:300
           <label>接口地址</label>
           <input id="baseUrl" placeholder="https://…/compatible-mode/v1">
         </div>
-        <p class="hint">密钥从环境变量读，不写进配置文件、不经过本界面。</p>
+        <div class="field">
+          <label>API Key <span id="keyState" class="hint"></span></label>
+          <div class="keyrow">
+            <input id="apiKey" type="password" autocomplete="off" placeholder="sk-…（已设置可留空）">
+            <button class="btn ghost sm" id="toggleKey">显示</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn ghost sm" id="testModels">测试模型能不能用</button>
+          <span class="hint" id="testHint">真调一次，音频要确实进了模型才算通过</span>
+        </div>
+        <div class="mtest" id="mtest"></div>
+        <p class="hint" style="margin-top:10px">密钥存本机 <code>config/config.local.yaml</code>，不进 git；环境变量优先于这里。</p>
       </div>
 
       <div id="tab-run" style="display:none">
@@ -192,8 +229,12 @@ video{width:100%;border-radius:12px;background:#000;display:block;max-height:300
           <label>单镜最长秒数（超过则等分）</label>
           <input id="r-maxshot" type="number" step="1" min="2">
         </div>
-        <button class="btn ghost sm" id="saveCfg" style="margin-top:6px">保存配置</button>
         <p class="hint" style="margin-top:10px">保存在 config/config.local.yaml，不覆盖主配置。</p>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-top:14px;align-items:center">
+        <button class="btn" id="saveCfg">保存配置</button>
+        <span class="hint" id="saveHint"></span>
       </div>
     </div>
   </section>
@@ -290,6 +331,11 @@ function el(tag, cls, txt){ const e = document.createElement(tag); if(cls) e.cla
   if(txt != null) e.textContent = txt; return e; }
 
 /* ---------- 配置 ---------- */
+function goTab(name){
+  $$(".tab").forEach(x => x.classList.toggle("on", x.dataset.tab === name));
+  $("#tab-models").style.display = name === "models" ? "" : "none";
+  $("#tab-run").style.display = name === "run" ? "" : "none";
+}
 async function loadCfg(){
   try{
     const c = await api("/api/config");
@@ -303,38 +349,114 @@ async function loadCfg(){
     $("#r-speech").value = c.speech_assign || "whole";
     $("#r-scene").value = (c.shot || {}).scene_threshold ?? 0.2;
     $("#r-maxshot").value = (c.shot || {}).max_shot_sec ?? 10;
+    // 密钥不回显：只提示"已有"和尾巴四位，输入框留空表示不修改
+    $("#apiKey").value = "";
+    if(c.has_api_key){
+      $("#apiKey").placeholder = c.api_key_source === "env"
+        ? "已由环境变量提供，留空即可"
+        : "已保存（" + (c.api_key_hint || "****") + "），留空不修改";
+      $("#keyState").textContent = c.api_key_source === "env" ? "来自环境变量" : "已保存在本机";
+    }else{
+      $("#apiKey").placeholder = "sk-…";
+      $("#keyState").textContent = "还没填";
+    }
     paintStatus(c);
   }catch(e){ toast("读取配置失败：" + e.message); }
 }
 function paintStatus(c){
   const s = $("#status"); s.innerHTML = "";
-  const ok = c.has_api_key;
+  // mock 是离线演示模式，本来就不需要密钥，别误报
+  const ok = !!c.has_api_key || c.provider === "mock";
   const p1 = el("div","pill"); p1.append(el("i","dot " + (ok?"ok":"bad")));
-  p1.append(document.createTextNode("密钥 " + (ok?"已设置":"未设置"))); s.append(p1);
+  p1.append(document.createTextNode("密钥 " + (ok?"已设置":"未设置")));
+  if(!ok){
+    p1.style.cursor = "pointer"; p1.title = "点击去填";
+    p1.onclick = () => { goTab("models"); $("#apiKey").focus(); };
+  }
+  s.append(p1);
+  const p2 = el("div","pill"); p2.append(el("b",null, c.provider || "-")); s.append(p2);
   if(c.local_file){ const p = el("div","pill"); p.append(el("b",null,"本机配置")); s.append(p); }
-  const p3 = el("div","pill"); p3.append(el("b",null,"模型可改")); s.append(p3);
+  // 挡住流程的问题放顶部，别让用户点下去才被打回
+  $("#keyBanner").style.display = ok ? "none" : "flex";
 }
-async function saveCfg(silent){
-  const body = {
+
+function cfgBody(){
+  return {
     models:{asr:$("#m-asr").value.trim(), sed:$("#m-sed").value.trim(),
             music:$("#m-music").value.trim(), vl:$("#m-vl").value.trim(),
             merge:$("#m-merge").value.trim()},
     runtime:{max_workers:Number($("#r-workers").value)||4},
-    speech_assign:$("#r-speech").value
+    speech_assign:$("#r-speech").value,
+    api_key:$("#apiKey").value.trim() || undefined
   };
-  try{ await api("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},
-       body:JSON.stringify(body)});
-    if(!silent) toast("已保存到本机配置");
-    loadCfg();
-  }catch(e){ toast("保存失败：" + e.message); }
 }
-$("#saveCfg").onclick = () => saveCfg(false);
+async function saveCfg(silent){
+  try{
+    await api("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},
+       body:JSON.stringify(cfgBody())});
+    $("#apiKey").value = "";
+    if(!silent) toast("已保存到本机配置");
+    await loadCfg();
+    return true;
+  }catch(e){ toast("保存失败：" + e.message); return false; }
+}
+$("#saveCfg").onclick = async () => {
+  const ok = await saveCfg(false);
+  $("#saveHint").textContent = ok ? "已写入 config/config.local.yaml" : "";
+};
+$("#toggleKey").onclick = () => {
+  const i = $("#apiKey"), show = i.type === "password";
+  i.type = show ? "text" : "password";
+  $("#toggleKey").textContent = show ? "隐藏" : "显示";
+};
+$("#gotoKey").onclick = () => { goTab("models"); $("#apiKey").focus(); };
 
-$$(".tab").forEach(t => t.onclick = () => {
-  $$(".tab").forEach(x => x.classList.remove("on")); t.classList.add("on");
-  $("#tab-models").style.display = t.dataset.tab === "models" ? "" : "none";
-  $("#tab-run").style.display = t.dataset.tab === "run" ? "" : "none";
-});
+/* 模型实测：不是看 200，要看到音频 token、要能返回约定 JSON */
+$("#testModels").onclick = async () => {
+  const btn = $("#testModels"), old = btn.textContent;
+  btn.disabled = true; btn.textContent = "正在测…（几十秒）";
+  $("#testHint").textContent = "逐个角色真调一次，期间别关页面";
+  try{
+    const r = await api("/api/check-models",{method:"POST",
+      headers:{"Content-Type":"application/json"}, body:JSON.stringify(cfgBody())});
+    renderTest(r);
+    $("#apiKey").value = "";
+    loadCfg();
+  }catch(e){
+    const box = $("#mtest"); box.classList.add("show"); box.innerHTML = "";
+    box.append(el("div","hint","测试没跑起来：" + e.message));
+  }finally{ btn.disabled = false; btn.textContent = old;
+            $("#testHint").textContent = "真调一次，音频要确实进了模型才算通过"; }
+};
+function renderTest(r){
+  const box = $("#mtest"); box.classList.add("show"); box.innerHTML = "";
+  if(r.error){ box.append(el("div","hint","测试出错：" + r.error)); return; }
+  if(r.fatal){
+    const d = el("div","hint","连不上或没配好：" + r.fatal);
+    box.append(d); $("#keyBanner").style.display = "flex"; return;
+  }
+  (r.results || []).forEach(x => {
+    const row = el("div","mres");
+    const mark = x.status === "可用" ? "√" : (x.status === "存疑" ? "!" : "×");
+    const m = el("span"); m.textContent = mark;
+    m.style.color = x.status === "可用" ? "var(--ok)" : (x.status === "存疑" ? "var(--warn)" : "var(--err)");
+    m.style.fontWeight = "700";
+    row.append(m);
+    row.append(el("span","nm", x.role));
+    const dt = el("div","dt");
+    dt.append(el("b",null, x.model + "  "));
+    dt.append(document.createTextNode(x.detail || ""));
+    row.append(dt);
+    box.append(row);
+  });
+  const bad = (r.results||[]).filter(x => x.status !== "可用").length;
+  const sum = el("div","hint", bad ? ("有 " + bad + " 个角色不达标，先换模型再跑，否则结果是空的。")
+                                   : "全部可用，可以开跑。");
+  sum.style.marginTop = "10px";
+  box.append(sum);
+}
+
+$$(".tab").forEach(t => t.onclick = () => goTab(t.dataset.tab));
 
 /* ---------- 选视频 ---------- */
 $("#pick").onclick = async () => {
@@ -387,13 +509,24 @@ drop.addEventListener("drop", e => {
 /* ---------- 运行 ---------- */
 $("#start").onclick = async () => {
   if(!video) return;
+  // 缺密钥就别让它跑：切镜抽帧要几分钟，跑到调模型才失败等于白等
+  if(cfgs && !cfgs.has_api_key && cfgs.provider !== "mock"){
+    toast("还没配 API Key，先填一个");
+    goTab("models"); $("#apiKey").focus();
+    return;
+  }
   $("#start").disabled = true;
   try{
     await saveCfg(true);
     await api("/api/start",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({video, speech_assign:$("#r-speech").value})});
     showRun(); startPoll();
-  }catch(e){ toast(e.message); $("#start").disabled = false; }
+  }catch(e){
+    toast(e.message);
+    $("#start").disabled = false;
+    // 被打回的原因如果是配置问题，直接把入口摆出来
+    if(/API Key|密钥/.test(e.message)){ goTab("models"); $("#apiKey").focus(); }
+  }
 };
 function showRun(){
   $("#stage-pick").style.display = "none";
@@ -424,14 +557,47 @@ function paintState(s){
   if(s.status === "done"){ stopPoll(); showDone(s); }
   if(s.status === "error"){
     stopPoll();
-    const box = $("#errBox");
-    box.style.display = "block";
-    box.textContent = "任务失败：" + (s.error || "未知错误") + "\n\n日志见上一步。";
-    $("#runTitle").textContent = "出错了";
-    $("#runDetail").textContent = s.error || "";
-    $("#stage-run").style.display = "";
-    toast("任务失败");
+    paintError(s.error || "未知错误");
   }
+}
+
+/* 失败要把"下一步该做什么"说出来，只给一句异常等于把问题丢回给用户 */
+function paintError(msg){
+  const box = $("#errBox");
+  box.style.display = "block";
+  box.textContent = msg;
+  $("#runTitle").textContent = "出错了";
+  $("#runDetail").textContent = msg;
+
+  let tip = "", act = "";
+  if(/没配密钥|API ?Key|密钥|401|unauthorized/i.test(msg)){
+    tip = "密钥没填或无效。去「配置 → API Key」填一个，再点「测试模型」确认。"; act = "key";
+  }else if(/没配接口地址|base.?url|接口地址/i.test(msg)){
+    tip = "接口地址不对。去「配置 → 接口地址」检查，注意末尾的 /v1。"; act = "key";
+  }else if(/ECONNREFUSED|timed out|超时|getaddrinfo|SSL|Connection|连不上/i.test(msg)){
+    tip = "连不上服务端。检查网络和代理，确认接口地址从这台机器能访问。"; act = "key";
+  }else if(/invalid_parameter|model_not_found|400|不支持|audio_tokens/i.test(msg)){
+    tip = "模型不吃这个模态。用「测试模型」逐个看，音频角色必须选 omni / audio 系列。"; act = "test";
+  }
+  if(tip){
+    const p = el("div","hint","→ " + tip);
+    p.style.marginTop = "10px";
+    box.append(p);
+    const b = el("button","btn sm", act === "test" ? "去测试模型" : "去配置");
+    b.style.marginTop = "10px";
+    b.onclick = () => {
+      backToPick(); goTab("models");
+      if(act === "test") $("#testModels").click(); else $("#apiKey").focus();
+    };
+    box.append(b);
+  }
+  $("#stage-run").style.display = "";
+  toast("任务失败");
+}
+function backToPick(){
+  $("#stage-run").style.display = "none";
+  $("#stage-done").style.display = "none";
+  $("#stage-pick").style.display = "grid";
 }
 async function tick(){
   try{ const s = await api("/api/state"); paintState(s); }
@@ -489,6 +655,21 @@ $("#pmReset").onclick = async () => {
     $("#pmMsg").textContent = "已恢复内置版本。";
     loadPrompt(name);
   }catch(e){ $("#pmMsg").textContent = e.message; }
+};
+
+/* ---------- 心跳与退出 ---------- */
+// 页面每 5 秒报一次活，服务端 30 秒收不到就自己退出，不留孤儿进程。
+function ping(){ fetch("/api/ping",{method:"POST",keepalive:true}).catch(()=>{}); }
+ping(); setInterval(ping, 5000);
+
+$("#quitApp").onclick = async () => {
+  const st = await api("/api/state").catch(()=>null);
+  if(st && st.status === "running" && !confirm("任务还在跑，现在关会中断它。确定关？")) return;
+  try{ await api("/api/quit",{method:"POST"}); }catch(e){}
+  document.body.innerHTML =
+    "<div style='padding:48px;font:15px/1.8 system-ui;color:#8b949e'>" +
+    "<div style='font-size:17px;color:#e6edf3;margin-bottom:6px'>已退出</div>" +
+    "本地服务已关闭，这个标签页可以关掉了。</div>";
 };
 
 loadCfg();

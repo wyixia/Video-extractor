@@ -183,7 +183,9 @@ def build_full(version: str) -> Path:
     name = f"VideoExtractor-{version}-full"
     cmd = [
         sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
-        "--name", "VideoExtractor", "--onedir", "--console",
+        # --windowed：双击不弹黑窗。没有控制台就没有 stdout，
+        # launcher 会把它兜到 _work/app.log，启动失败用系统弹窗提示。
+        "--name", "VideoExtractor", "--onedir", "--windowed",
         "--distpath", str(pyout), "--workpath", str(work),
         "--specpath", str(work),
         # 静态资源跟着代码走；config 不打包，放 exe 旁边让用户能改

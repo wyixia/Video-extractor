@@ -4,7 +4,7 @@
 
 带图形界面：选视频 → 跑 → 在应用里对着视频看报告。
 
-**下载**：[Releases](https://github.com/wyixia/Video-extractor/releases/latest) 里有两个包——`full` 双击即用（Python 与 ffmpeg 都打进去了，58 MB），`lite` 只有代码（需要自备 Python 3.9+，0.1 MB）。功能完全一致。
+**下载**：[Releases](https://github.com/wyixia/Video-extractor/releases/latest) 里有两个包——`full` 双击即用（Python 与 ffmpeg 都打进去了，约 60 MB），`lite` 只有代码（需要自备 Python 3.9+，0.1 MB）。功能完全一致。
 
 ---
 
@@ -59,8 +59,8 @@
 ### lite
 
 ```bash
-unzip VideoExtractor-1.0.1-lite.zip
-cd VideoExtractor-1.0.1-lite
+unzip VideoExtractor-1.0.2-lite.zip
+cd VideoExtractor-1.0.2-lite
 python tools/doctor.py --fix      # 缺什么装什么
 python -m app.server              # 浏览器会自动打开
 ```
@@ -69,11 +69,15 @@ Windows 双击 `start.bat`；macOS / Linux 用 `./start.sh`。
 
 ### full
 
-解压后双击 `VideoExtractor.exe`（Windows）或 `start.sh`。
+解压后双击 `VideoExtractor.exe`（Windows）或 `start.sh`。没有控制台窗口，日志在 `_work/app.log`。
 
 ### 设置密钥
 
-密钥只从环境变量读，不写进配置、不随结果保存：
+两种方式，环境变量优先：
+
+1. **在界面里填**（推荐）：打开应用 → 右侧「配置 → API Key」→ 填 → 保存。
+   存到本机 `config/config.local.yaml`，该文件在 `.gitignore` 里，不会被提交。
+2. **环境变量**：
 
 ```powershell
 # Windows PowerShell
@@ -85,7 +89,13 @@ $env:LLM_BASE_URL="https://your-endpoint/v1"; $env:LLM_API_KEY="sk-xxx"
 export LLM_BASE_URL=... LLM_API_KEY=...
 ```
 
+填完点「测试模型能不能用」——它会逐个角色真调一次，音频角色要看到音频确实进了模型才算通过。不通过会直接告诉你哪个角色不行、为什么。
+
 没有密钥时也能先看界面：`python -m app.server --provider mock`（假数据，不联网）。
+
+### 关掉应用
+
+点右上角「退出」，或直接关掉所有页面 —— 服务端 30 秒收不到页面心跳会自己退出，不会留下后台进程。任务正在跑时不会自动退，避免把标注掐掉。
 
 ## 配置模型
 

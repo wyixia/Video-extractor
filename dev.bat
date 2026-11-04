@@ -1,5 +1,7 @@
 @echo off
-rem 源码版启动入口：双击即可。打包版用 start.bat 或 VideoExtractor.exe。
+rem 源码版启动入口：双击即可，窗口会最小化到任务栏。
+rem 想在前台看日志，就在命令行里跑 python -m app.server。
+rem 打包版用 start.bat 或 VideoExtractor.exe（无窗口）。
 setlocal
 cd /d "%~dp0"
 
@@ -15,11 +17,9 @@ pause
 exit /b 1
 
 :runpy
-py -3 -m app.server
-goto done
+start "VideoExtractor" /min py -3 -m app.server
+exit /b 0
 
 :run
-python -m app.server
-
-:done
-if errorlevel 1 pause
+start "VideoExtractor" /min python -m app.server
+exit /b 0

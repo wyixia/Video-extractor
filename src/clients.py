@@ -115,9 +115,11 @@ class DashScopeClient(BaseClient):
             raise RuntimeError("需要安装 openai>=1.52.0 / requests: pip install openai requests") from e
 
         ds = cfg["dashscope"]
-        api_key = os.getenv(ds["api_key_env"])
+        # 环境变量优先；界面上保存的密钥作为兜底（存在本机配置里，不进 git）
+        api_key = (os.getenv(ds.get("api_key_env", "")) or ds.get("api_key") or "").strip()
         if not api_key:
-            raise RuntimeError(f"未设置环境变量 {ds['api_key_env']}")
+            raise RuntimeError(
+                f"没配密钥：在应用「配置 → API Key」里填，或设环境变量 {ds.get('api_key_env')}")
         self.api_key = api_key
         self.base_url = ds["base_url"]
         self.asr_base = ds["asr_base_url"].rstrip("/")
@@ -213,9 +215,15 @@ class HttpCompatClient(BaseClient):
     def __init__(self, cfg: dict):
         c = cfg.get("compat", {})
         self.base = os.getenv(c.get("base_url_env", "LLM_BASE_URL"), c.get("base_url", "")).rstrip("/")
-        self.key = os.getenv(c.get("api_key_env", "LLM_API_KEY"))
-        if not (self.base and self.key):
-            raise RuntimeError("compat 需要环境变量 LLM_BASE_URL / LLM_API_KEY")
+        # 环境变量优先；界面上保存的密钥作为兜底（存在本机配置里，不进 git）
+        self.key = (os.getenv(c.get("api_key_env", "LLM_API_KEY")) or c.get("api_key") or "").strip()
+        # 分开报，缺哪个说哪个：混成一句"需要环境变量"让人不知道该改哪里
+        if not self.base:
+            raise RuntimeError("没配接口地址：在应用「配置 → 接口地址」里填，或设环境变量 "
+                               f"{c.get('base_url_env', 'LLM_BASE_URL')}")
+        if not self.key:
+            raise RuntimeError("没配密钥：在应用「配置 → API Key」里填，或设环境变量 "
+                               f"{c.get('api_key_env', 'LLM_API_KEY')}")
 
     def chat(self, model: str, messages: List[dict], timeout: int = 30, **kwargs) -> str:
         return self.chat_detail(model, messages, timeout=timeout, **kwargs)[0]

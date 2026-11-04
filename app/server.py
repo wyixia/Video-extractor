@@ -133,6 +133,18 @@ def _save_local_config(values: dict) -> Path:
     if values.get("speech_assign"):
         lines.append("speech:")
         lines.append(f"  assign: {values['speech_assign']}")
+    key = (values.get("api_key") or "").strip()
+    if key or values.get("clear_key"):
+        # 密钥写进本地配置：环境变量仍然优先，这里只是让界面能配。
+        # 该文件在 .gitignore 里，不会被提交；删掉即失效。
+        try:
+            prov = (load_config(CFG_DEFAULT).get("provider") or "compat").strip()
+        except Exception:
+            prov = "compat"
+        seg = "dashscope" if prov == "dashscope" else "compat"
+        lines.append(f"# 密钥存在本机配置文件里，不进 git；环境变量优先于这里的值。")
+        lines.append(f"{seg}:")
+        lines.append(f"  api_key: {json.dumps(key)}")
     p.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return p
 
@@ -226,6 +238,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._save_config(self._body())
         if u.path == "/api/prompt":
             return self._save_prompt(self._body())
+        if u.path == "/api/check-models":
+            return self._check_models(self._body())
+        if u.path == "/api/ping":
+            self.server.last_seen = time.time()
+            return self._json({"ok": True})
+        if u.path == "/api/quit":
+            return self._quit()
         if u.path == "/api/prompt-check":
             name = (self._body() or {}).get("name", "vl")
             return self._json({"name": name, "problems": check_prompt(name)})
@@ -261,6 +280,11 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             return {"error": f"{type(e).__name__}: {e}"}
         local = DATA / "config" / "config.local.yaml"
+        compat = cfg.get("compat") or {}
+        # 密钥来源要能区分：环境变量优先，界面保存的作为兜底
+        env_key = os.getenv(compat.get("api_key_env", "LLM_API_KEY")) or os.getenv("DASHSCOPE_API_KEY")
+        local_key = compat.get("api_key") or (cfg.get("dashscope") or {}).get("api_key")
+        source = "env" if env_key else ("local" if local_key else "")
         return {
             "models": cfg.get("models") or {},
             "runtime": {k: cfg.get("runtime", {}).get(k) for k in
@@ -268,17 +292,54 @@ class Handler(BaseHTTPRequestHandler):
             "speech_assign": (cfg.get("speech") or {}).get("assign", "whole"),
             "shot": {k: cfg.get("preprocess", {}).get("shot_split", {}).get(k)
                      for k in ("scene_threshold", "min_shot_sec", "max_shot_sec")},
-            "base_url": os.getenv("LLM_BASE_URL") or (cfg.get("compat") or {}).get("base_url", ""),
-            "has_api_key": bool(os.getenv("LLM_API_KEY") or os.getenv("DASHSCOPE_API_KEY")),
+            "base_url": os.getenv(compat.get("base_url_env", "LLM_BASE_URL"))
+                        or compat.get("base_url", ""),
+            "provider": getattr(self.server, "provider", "") or cfg.get("provider", ""),
+            "has_api_key": bool(env_key or local_key),
+            "api_key_source": source,
+            "api_key_hint": f"…{str(local_key)[-4:]}" if local_key else "",
             "local_file": str(local) if local.exists() else "",
         }
 
     def _save_config(self, body: dict):
         try:
             p = _save_local_config(body)
-            return self._json({"ok": True, "file": str(p)})
+            return self._json({"ok": True, "file": str(p),
+                               "config": self._config_view()})
         except Exception as e:
             return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+
+    def _check_models(self, body: dict):
+        """界面上的「测试模型」：真跑一轮，逐个角色给结论。
+
+        不是只看 HTTP 200 —— 音频角色要看到 audio_tokens 才算真听进去了，
+        图像角色要能返回约定的 JSON 键。跑一次几十秒，前端要转圈。
+        """
+        try:
+            payload = body.get("config") or body
+            if body.get("save", True) and (payload.get("models") or payload.get("api_key")):
+                _save_local_config(payload)      # 允许"边测边存"，省一步
+            cfg = load_config(CFG_DEFAULT)
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "check_models", CODE / "tools" / "check_models.py")
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            results, fatal = mod.collect(cfg)
+            bad = [r for r in results if r.get("status") == getattr(mod, "FAIL", "不可用")]
+            return self._json({"fatal": fatal, "results": results,
+                               "bad": len(bad),
+                               "ok": bool(results) and not bad and not fatal})
+        except Exception as e:
+            return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+
+    def _quit(self):
+        """显式退出。任务在跑时拒绝，避免把用户正在跑的活掐掉。"""
+        if self.server.job.snapshot()["status"] == "running":
+            return self._json({"error": "任务还在跑，等它结束再关"}, 409)
+        self._json({"ok": True})
+        threading.Thread(target=self.server.shutdown, daemon=True).start()
+        return None
 
     def _prompt_view(self, name: str) -> dict:
         paths = prompt_paths(name)
@@ -317,6 +378,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "没有选择视频"}, 400)
         if not Path(video).exists():
             return self._json({"error": f"文件不存在：{video}"}, 400)
+        # 缺密钥就别开跑了：跑下去要先把视频切镜、抽帧、抽音轨，几分钟后才在调用模型时失败
+        view = self._config_view()
+        if view.get("provider") != "mock" and not view.get("has_api_key"):
+            return self._json({"error": "还没配置 API Key。右侧「配置 → API Key」填一个，"
+                                       "或先点「测试模型」确认能连通。"}, 400)
         if (body.get("config") or {}).get("models"):
             _save_local_config(body["config"])
         t = threading.Thread(target=_run_job,
@@ -478,15 +544,37 @@ def _save_history(job: Job):
         pass
 
 
-def serve(port: int = 0, open_browser: bool = True, provider: str = ""):
+def _watchdog(srv, grace: float = 30.0):
+    """界面关掉之后自己退出，不留下孤儿进程。
+
+    以页面心跳为准：前端每几秒打一次 /api/ping，超过 grace 秒没动静就退。
+    任务在跑时不退——关掉页面不该把正在跑的标注杀掉。
+    """
+    while True:
+        time.sleep(3)
+        if time.time() - getattr(srv, "last_seen", time.time()) <= grace:
+            continue
+        if srv.job.snapshot()["status"] == "running":
+            srv.last_seen = time.time()
+            continue
+        print("[应用] 界面已关闭，自动退出")
+        srv.shutdown()
+        return
+
+
+def serve(port: int = 0, open_browser: bool = True, provider: str = "",
+          watchdog: bool = True):
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     srv.job = Job()
     srv.provider = provider
+    srv.last_seen = time.time()
     real = srv.server_address[1]
     url = f"http://127.0.0.1:{real}/"
     print(f"[应用] {url}")
     if open_browser:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+    if watchdog:
+        threading.Thread(target=_watchdog, args=(srv,), daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
@@ -502,5 +590,7 @@ if __name__ == "__main__":
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--provider", default="", choices=["", "compat", "dashscope", "mock"],
                     help="覆盖配置的 provider；mock 用假数据跑通界面，不联网")
+    ap.add_argument("--no-watchdog", action="store_true",
+                    help="界面关掉后不自动退出（调试或脚本调用时用）")
     a = ap.parse_args()
-    serve(a.port, not a.no_browser, a.provider)
+    serve(a.port, not a.no_browser, a.provider, watchdog=not a.no_watchdog)
