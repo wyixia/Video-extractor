@@ -649,9 +649,12 @@ $("#start").onclick = async () => {
   }
 };
 function showRun(){
+  // 注意：这里不能写 style.display = ""。
+  // 样式表里有 #stage-run{display:none}，清掉内联样式等于又回到 none，
+  // 结果就是任务在跑、页面却一片空白。
   $("#stage-pick").style.display = "none";
   $("#stage-done").style.display = "none";
-  $("#stage-run").style.display = "";
+  $("#stage-run").style.display = "block";
   $("#runBar").style.width = "0%"; $("#runPct").textContent = "0%";
   $("#log").textContent = "";
   const box = $("#stages"); box.innerHTML = "";
@@ -711,7 +714,7 @@ function paintError(msg){
     };
     box.append(b);
   }
-  $("#stage-run").style.display = "";
+  $("#stage-run").style.display = "block";
   toast("任务失败");
 }
 function backToPick(){
@@ -729,7 +732,7 @@ function stopPoll(){ if(pollTimer){ clearInterval(pollTimer); pollTimer = null; 
 function showDone(s){
   $("#stage-pick").style.display = "none";
   $("#stage-run").style.display = "none";
-  $("#stage-done").style.display = "";
+  $("#stage-done").style.display = "block";
   $("#v").src = "/api/media?t=" + Date.now();
   $("#report").src = "/api/report?t=" + Date.now();
   $("#d-shots").textContent = (s.shots || 0) + " 个镜头";
