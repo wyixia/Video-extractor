@@ -107,25 +107,26 @@ class BaseClient:
 
 
 class DashScopeClient(BaseClient):
-    def __init__(self, cfg: dict):
+    def __init__(self, ep: dict):
         try:
             from openai import OpenAI
             import requests
         except ImportError as e:
             raise RuntimeError("需要安装 openai>=1.52.0 / requests: pip install openai requests") from e
 
-        ds = cfg["dashscope"]
+        self.name = ep.get("name", "default")
         # 环境变量优先；界面上保存的密钥作为兜底（存在本机配置里，不进 git）
-        api_key = (os.getenv(ds.get("api_key_env", "")) or ds.get("api_key") or "").strip()
+        api_key = endpoint_key(ep)
         if not api_key:
             raise RuntimeError(
-                f"没配密钥：在应用「配置 → API Key」里填，或设环境变量 {ds.get('api_key_env')}")
+                f"端点「{self.name}」没配密钥：在应用「配置 → 密钥」里填，"
+                f"或设环境变量 {ep.get('api_key_env') or 'DASHSCOPE_API_KEY'}")
         self.api_key = api_key
-        self.base_url = ds["base_url"]
-        self.asr_base = ds["asr_base_url"].rstrip("/")
+        self.base_url = ep["base_url"]
+        self.asr_base = (ep.get("asr_base_url") or ep["base_url"]).rstrip("/")
         self.http = requests.Session()
         # 尊重环境代理（HTTP_PROXY/HTTPS_PROXY）
-        self.client = OpenAI(api_key=api_key, base_url=ds["base_url"])
+        self.client = OpenAI(api_key=api_key, base_url=ep["base_url"])
 
     # --- 通用对话（VL / Omni / Merge） ---
     def chat(self, model: str, messages: List[dict], timeout: int = 30, **kwargs) -> str:
@@ -210,20 +211,24 @@ class HttpCompatClient(BaseClient):
 
     支持文本 + 图像(image_url 的 base64 data URL)；
     音频模态若端点不支持，会抛 PermanentError 并由编排层降级。
+    一个实例绑定一个端点（一份地址 + 一份密钥）。
     """
 
-    def __init__(self, cfg: dict):
-        c = cfg.get("compat", {})
-        self.base = os.getenv(c.get("base_url_env", "LLM_BASE_URL"), c.get("base_url", "")).rstrip("/")
-        # 环境变量优先；界面上保存的密钥作为兜底（存在本机配置里，不进 git）
-        self.key = (os.getenv(c.get("api_key_env", "LLM_API_KEY")) or c.get("api_key") or "").strip()
+    def __init__(self, ep: dict):
+        self.name = ep.get("name", "default")
+        # 地址与密钥都可以来自环境变量，环境变量优先
+        self.base = (os.getenv(ep.get("base_url_env") or "__none__", "")
+                     or ep.get("base_url", "")).rstrip("/")
+        self.key = endpoint_key(ep)
         # 分开报，缺哪个说哪个：混成一句"需要环境变量"让人不知道该改哪里
         if not self.base:
-            raise RuntimeError("没配接口地址：在应用「配置 → 接口地址」里填，或设环境变量 "
-                               f"{c.get('base_url_env', 'LLM_BASE_URL')}")
+            raise RuntimeError(
+                f"端点「{self.name}」没配地址：在应用「配置 → 端点」里填，"
+                f"或设环境变量 {ep.get('base_url_env') or '（无）'}")
         if not self.key:
-            raise RuntimeError("没配密钥：在应用「配置 → API Key」里填，或设环境变量 "
-                               f"{c.get('api_key_env', 'LLM_API_KEY')}")
+            raise RuntimeError(
+                f"端点「{self.name}」没配密钥：在应用「配置 → 密钥」里填，"
+                f"或设环境变量 {ep.get('api_key_env') or 'LLM_API_KEY'}")
 
     def chat(self, model: str, messages: List[dict], timeout: int = 30, **kwargs) -> str:
         return self.chat_detail(model, messages, timeout=timeout, **kwargs)[0]
@@ -303,12 +308,131 @@ class MockClient(BaseClient):
         ]}
 
 
+# ---------- 端点（一份地址 + 一份密钥） ----------
+
+# 角色固定为这几个。calibrate 不配就并入 merge。
+ROLES = ("asr", "sed", "music", "vl", "merge", "calibrate")
+
+
+def endpoint_key(ep: dict) -> str:
+    """一份端点的密钥：环境变量优先，其次界面保存的值。
+
+    两个来源都行是为了兼顾两种用法：CI/服务器用环境变量，桌面用户用界面。
+    """
+    env_name = ep.get("api_key_env") or ""
+    return ((os.getenv(env_name) if env_name else "") or ep.get("api_key") or "").strip()
+
+
+def endpoint_key_source(ep: dict) -> str:
+    """密钥来自哪里：env / local / 空。界面要显示这个，否则用户不知道哪个生效。"""
+    env_name = ep.get("api_key_env") or ""
+    if env_name and os.getenv(env_name):
+        return "env"
+    if (ep.get("api_key") or "").strip():
+        return "local"
+    return ""
+
+
+def resolve_endpoints(cfg: dict) -> dict:
+    """把配置归一成 {名字: 端点}。
+
+    新配置用 endpoints 段显式声明；老配置只有 compat / dashscope 一段，
+    这里自动折成一个名为 default 的端点，旧配置不用改就能继续跑。
+    """
+    raw = cfg.get("endpoints") or {}
+    if raw:
+        out = {}
+        default_type = (cfg.get("provider") or "compat").strip()
+        for name, ep in raw.items():
+            ep = dict(ep or {})
+            ep.setdefault("type", default_type if default_type != "mock" else "compat")
+            ep["name"] = str(name)
+            out[str(name)] = ep
+        return out
+
+    prov = (cfg.get("provider") or "compat").strip()
+    if prov == "dashscope":
+        ds = cfg.get("dashscope") or {}
+        return {"default": {
+            "name": "default", "type": "dashscope",
+            "base_url": ds.get("base_url", ""),
+            "asr_base_url": ds.get("asr_base_url", ""),
+            "api_key_env": ds.get("api_key_env", "DASHSCOPE_API_KEY"),
+            "api_key": ds.get("api_key", ""),
+        }}
+    c = cfg.get("compat") or {}
+    return {"default": {
+        "name": "default", "type": "compat",
+        "base_url": c.get("base_url", ""),
+        "base_url_env": c.get("base_url_env", "LLM_BASE_URL"),
+        "api_key_env": c.get("api_key_env", "LLM_API_KEY"),
+        "api_key": c.get("api_key", ""),
+    }}
+
+
+def default_endpoint_name(cfg: dict) -> str:
+    eps = resolve_endpoints(cfg)
+    if "default" in eps:
+        return "default"
+    return next(iter(eps), "default")
+
+
+def role_endpoint_map(cfg: dict) -> dict:
+    """角色 → 端点名。没写的角色回落到 default。"""
+    raw = cfg.get("role_endpoints") or {}
+    return {str(k): str(v) for k, v in raw.items() if v}
+
+
+def endpoint_for_role(cfg: dict, role: str) -> str:
+    m = role_endpoint_map(cfg)
+    return m.get(role) or m.get("*") or default_endpoint_name(cfg)
+
+
+def _make_client(ep: dict) -> BaseClient:
+    t = (ep.get("type") or "compat").strip()
+    if t == "dashscope":
+        return DashScopeClient(ep)
+    if t == "compat":
+        return HttpCompatClient(ep)
+    raise ValueError(f"端点「{ep.get('name')}」类型不认识：{t}（可选 compat / dashscope）")
+
+
+class ClientRouter(BaseClient):
+    """按角色把请求分到不同端点。
+
+    一个角色 = 一个 (地址, 密钥, 模型) 组合。这样音频走一家、视觉走另一家也成立：
+    各自的密钥、各自的配额，互不影响。
+    """
+
+    def __init__(self, cfg: dict):
+        self.cfg = cfg
+        self.endpoints = resolve_endpoints(cfg)
+        self.role_map = role_endpoint_map(cfg)
+        self._clients: dict = {}
+
+    def endpoint_name(self, role: str) -> str:
+        name = self.role_map.get(role) or self.role_map.get("*") or default_endpoint_name(self.cfg)
+        if name not in self.endpoints:
+            raise ValueError(
+                f"角色 {role} 指向端点「{name}」，但配置里只有 {list(self.endpoints)}")
+        return name
+
+    def for_role(self, role: str) -> BaseClient:
+        name = self.endpoint_name(role)
+        if name not in self._clients:
+            self._clients[name] = _make_client(self.endpoints[name])
+        return self._clients[name]
+
+    # 站不住脚就直接报错的兜底：单端点场景下调用方不用关心角色
+    def chat(self, model: str, messages: List[dict], **kwargs) -> str:
+        return self.for_role("merge").chat(model, messages, **kwargs)
+
+    def transcribe(self, audio_url: str, model: str, **kwargs) -> dict:
+        return self.for_role("asr").transcribe(audio_url, model, **kwargs)
+
+
 def build_client(cfg: dict) -> BaseClient:
-    provider = cfg.get("provider", "dashscope")
+    provider = (cfg.get("provider") or "").strip()
     if provider == "mock":
         return MockClient()
-    if provider == "dashscope":
-        return DashScopeClient(cfg)
-    if provider == "compat":
-        return HttpCompatClient(cfg)
-    raise ValueError(f"unknown provider: {provider}")
+    return ClientRouter(cfg)

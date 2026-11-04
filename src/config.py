@@ -22,7 +22,12 @@ def load_config(path: str = "config/config.yaml", overrides: Dict[str, Any] = No
     # 升级时主配置被替换也不会冲掉用户设置；删掉该文件即恢复默认。
     local = p.with_name("config.local.yaml")
     if p.name != "config.local.yaml" and local.exists():
-        _deep_update(cfg, _read_yaml(local))
+        patch = _read_yaml(local)
+        _deep_update(cfg, patch)
+        # 端点池必须整体替换：深合并会让界面上已经删掉的端点又冒出来
+        for k in ("endpoints", "role_endpoints"):
+            if k in patch:
+                cfg[k] = patch[k]
     if overrides:
         _deep_update(cfg, overrides)
     return cfg

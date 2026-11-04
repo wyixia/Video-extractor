@@ -17,11 +17,20 @@ class Pipeline:
     def __init__(self, cfg: dict, client: BaseClient = None, on_event=None):
         self.cfg = cfg
         self.client = client or build_client(cfg)
-        self.s1 = Skill1ASR(self.client, cfg)
-        self.s2 = Skill2SED(self.client, cfg)
-        self.s3 = Skill3Music(self.client, cfg)
-        self.s4 = Skill4VL(self.client, cfg)
-        self.s5 = Skill5Merge(self.client, cfg)
+
+        # 每个角色可能落在不同端点上（音频一家、视觉另一家，密钥各管各的），
+        # 所以按角色取客户端；单端点时拿到的都是同一个实例。
+        # 这里不吞异常：端点写错、密钥缺失要在任务开始时就说清楚，而不是跑一半才报。
+        def pick(role: str) -> BaseClient:
+            fn = getattr(self.client, "for_role", None)
+            return fn(role) if fn else self.client
+
+        self.s1 = Skill1ASR(pick("asr"), cfg)
+        self.s2 = Skill2SED(pick("sed"), cfg)
+        self.s3 = Skill3Music(pick("music"), cfg)
+        self.s4 = Skill4VL(pick("vl"), cfg)
+        self.s5 = Skill5Merge(pick("merge"), cfg)
+        self.calibrate_client = pick("calibrate")
         # 进度回调：图形界面靠它显示阶段与剩余量。不传就是空函数，行为与原来一致。
         self.on_event = on_event or (lambda e: None)
 
@@ -178,7 +187,7 @@ class Pipeline:
         # 抽不到字幕就直接返回，不调用模型、不改一个字。失败也不阻断主流程。
         if sk["asr"]["enabled"] and (raw.get("asr") or {}).get("segments"):
             self._emit("calibrate", 0.9, "核对画面字幕与转写")
-            raw["asr"]["calibration"] = calibrate_names(self.client, self.cfg, raw, shots)
+            raw["asr"]["calibration"] = calibrate_names(self.calibrate_client, self.cfg, raw, shots)
 
         # ---- P2 合并校验 ----
         self._emit("merge", 0.94, "拼装字段、写总览")

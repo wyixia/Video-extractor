@@ -1,14 +1,35 @@
-# 自定义 OpenAI 兼容端点运行时配置（密钥只从环境变量读，不落盘）
-provider: compat
+# 运行时配置。密钥、地址、模型都可以在应用界面里改，改完写进 config.local.yaml。
+provider: compat          # 端点没写 type 时的默认类型：compat | dashscope
 
-compat:
-  base_url_env: LLM_BASE_URL
-  api_key_env: LLM_API_KEY
-  base_url: https://maas.qianwenaiapi.com/compatible-mode/v1
+# 端点池：一份地址 + 一份密钥 = 一个端点。
+# 不同厂商、不同接口的模型分别配成不同端点，密钥各管各的，互不影响。
+# 同一家的不同密钥（比如按部门分账）也可以拆成两个端点。
+endpoints:
+  default:
+    type: compat
+    base_url: https://maas.qianwenaiapi.com/compatible-mode/v1
+    api_key_env: LLM_API_KEY     # 环境变量优先；界面里填的存本地配置
+  # 例子：视觉走另一家
+  # vision:
+  #   type: compat
+  #   base_url: https://api.other-vendor.com/v1
+  #   api_key_env: VISION_API_KEY
+  # 例子：阿里云百炼（ASR 走原生异步接口，需要 asr_base_url）
+  # aliyun:
+  #   type: dashscope
+  #   base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  #   asr_base_url: https://dashscope.aliyuncs.com/api/v1
+  #   api_key_env: DASHSCOPE_API_KEY
+
+# 角色 → 端点。没写的角色全部走 default。
+# 只有需要"音频一家、视觉另一家"时才要配这一段。
+role_endpoints:
+  # vl: vision
+  # asr: aliyun
 
 models:
   # 每个角色对模型的要求不同，换模型前先看要求，再用 tools/check_models.py 实测。
-  # 共同前提：OpenAI 兼容的 /chat/completions，且能被提示词要求着输出 JSON。
+  # 模型名必须属于它所在端点；同一个角色不写端点就用 default。
   #
   # asr / sed / music —— 必须能接音频，且必须真的听
   #   请求体形如 {"type":"input_audio","input_audio":{"data":"data:audio/mp3;base64,..."}}

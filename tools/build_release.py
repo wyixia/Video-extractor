@@ -77,15 +77,15 @@ echo "启动应用…"
 exec $PY -m app.server --desktop
 """
 
-ENV_EXAMPLE = """# 密钥有两个地方可放，环境变量优先于应用界面保存的值。
-# 1) 应用里：「配置 → API Key」填完保存，写进 config/config.local.yaml（不进 git）
+ENV_EXAMPLE = """# 密钥按端点配，环境变量优先于界面里保存的值。
+# 1) 应用里：「配置 → 端点」每行填地址和密钥，写进 config/config.local.yaml（不进 git）
 # 2) 这里：复制成 .env 或直接在系统里设同名环境变量
 
-# OpenAI 兼容端点
-LLM_BASE_URL=https://your-endpoint/v1
+# 默认端点（音频、文本走它）
 LLM_API_KEY=sk-xxxxxxxxxxxxxxxx
 
-# 用阿里云百炼时改为（配置文件里 provider 也要改成 dashscope）：
+# 如果另配了端点，变量名对应那个端点的 api_key_env，例如：
+# VISION_API_KEY=sk-xxxxxxxxxxxxxxxx
 # DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxx
 """
 

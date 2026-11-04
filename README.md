@@ -80,23 +80,52 @@ Windows 双击 `start.bat`；macOS / Linux 用 `./start.sh`。
 
 ### 设置密钥
 
-两种方式，环境变量优先：
+密钥是按**端点**配的。一个端点 = 一份接口地址 + 一份密钥，不同厂商的模型分开配，密钥互不影响。
 
-1. **在界面里填**（推荐）：打开应用 → 右侧「配置 → API Key」→ 填 → 保存。
-   存到本机 `config/config.local.yaml`，该文件在 `.gitignore` 里，不会被提交。
-2. **环境变量**：
+在界面里：右侧「配置 → 端点」，每一行填地址和密钥。上面模型那几行，右边可以选它走哪个端点。
+
+存到本机 `config/config.local.yaml`，该文件在 `.gitignore` 里，不会被提交。环境变量优先于界面里填的值。
+
+也可以直接用环境变量（适合服务器、CI）：
 
 ```powershell
 # Windows PowerShell
-$env:LLM_BASE_URL="https://your-endpoint/v1"; $env:LLM_API_KEY="sk-xxx"
+$env:LLM_API_KEY="sk-xxx"
 ```
 
 ```bash
 # macOS / Linux
-export LLM_BASE_URL=... LLM_API_KEY=...
+export LLM_API_KEY=...
 ```
 
-填完点「测试模型能不能用」——它会逐个角色真调一次，音频角色要看到音频确实进了模型才算通过。不通过会直接告诉你哪个角色不行、为什么。
+### 什么时候需要多个端点
+
+默认一个端点就够用。需要拆开的典型情况：
+
+- **音频和视觉用了不同厂商**：`asr/sed/music` 一家（要能听音频），`vl` 另一家（要能看图）
+- **不同密钥分开计费**：同一家的两把 key，按用途拆成两个端点
+- **视觉走内网、文本走公网**
+
+配置长这样：
+
+```yaml
+endpoints:
+  default:
+    type: compat
+    base_url: https://maas.qianwenaiapi.com/compatible-mode/v1
+    api_key_env: LLM_API_KEY
+  vision:
+    type: compat
+    base_url: https://api.other-vendor.com/v1
+    api_key_env: VISION_API_KEY
+
+role_endpoints:       # 不写的角色全部走 default
+  vl: vision
+```
+
+界面上就是「新增端点 → 填地址和密钥 → 在 `画面` 那一行选 vision」。
+
+填完点「测试模型能不能用」——它会逐个角色真调一次，音频角色要看到音频确实进了模型才算通过。不通过会直接告诉你**哪个角色的哪个端点**不行、为什么。
 
 没有密钥时也能先看界面：`python -m app.server --provider mock`（假数据，不联网）。
 
@@ -108,14 +137,16 @@ export LLM_BASE_URL=... LLM_API_KEY=...
 
 改 `config/config.compat.yaml`，或在应用界面里改（保存到 `config/config.local.yaml`，不覆盖主配置）。
 
-| 角色 | 用途 | 对模型的要求 |
-|---|---|---|
-| `asr` | 台词转写 | **必须能接音频**，并真的听 |
-| `sed` | 环境音 | 同上 |
-| `music` | 背景音乐 | 同上 |
-| `vl` | 画面标注 | **必须能接图片**，单次能吃多张（3–6 帧） |
-| `merge` | 总览文案 | 普通文本模型 |
-| `calibrate` | 字幕校对 | 可选，不配就用 `merge` |
+| 角色 | 用途 | 对模型的要求 | 可选的端点 |
+|---|---|---|---|
+| `asr` | 台词转写 | **必须能接音频**，并真的听 | 支持 `input_audio` 的兼容端点 / dashscope |
+| `sed` | 环境音 | 同上 | 同上 |
+| `music` | 背景音乐 | 同上 | 同上 |
+| `vl` | 画面标注 | **必须能接图片**，单次能吃多张（3–6 帧） | 支持 `image_url` 的兼容端点 / dashscope |
+| `merge` | 总览文案 | 普通文本模型 | 任意 |
+| `calibrate` | 字幕校对 | 可选，不配就用 `merge` | 任意 |
+
+模型名必须属于它所在端点：同一个模型名在 A 家能用，换到 B 家可能报 404。改模型时顺手确认这一行的端点选对了。
 
 共同前提：OpenAI 兼容的 `/chat/completions`，且能被要求着输出 JSON。
 

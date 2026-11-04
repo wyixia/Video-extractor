@@ -24,6 +24,8 @@ from urllib.parse import parse_qs, urlparse
 CODE = Path(__file__).resolve().parent.parent   # 代码与静态资源所在位置
 sys.path.insert(0, str(CODE))
 
+from src.clients import (default_endpoint_name, endpoint_for_role, endpoint_key,
+                         endpoint_key_source, resolve_endpoints, role_endpoint_map)  # noqa: E402
 from src.config import load_config, prompt_paths, resolve_path  # noqa: E402
 from src.env import project_root  # noqa: E402
 from src.export import frontend_payload, write_json  # noqa: E402
@@ -112,39 +114,88 @@ class _Tee(io.TextIOBase):
                 pass
 
 
+def _yaml_str(v) -> str:
+    """标量统一用双引号包：API Key 里可能有 : # @ 等字符，裸写会改变 YAML 结构。"""
+    return json.dumps(str(v), ensure_ascii=False)
+
+
 def _save_local_config(values: dict) -> Path:
     """用户改的配置写到 config/config.local.yaml，主配置不动。
 
     叠加而不是覆盖：升级时主配置被替换，用户的模型选择仍然生效；
-    出问题删掉这个文件就回到默认。
+    出问题删掉这个文件就回到默认。唯独 endpoints 例外——它是整体替换的，
+    否则界面上删掉的端点会在下次启动时又冒出来。
     """
     p = DATA / "config" / "config.local.yaml"
-    lines = ["# 由应用界面写入，覆盖 config.compat.yaml 中的同名项。删掉即恢复默认。"]
+    old = {}
+    if p.exists():
+        try:
+            old = load_config(str(p))
+        except Exception:
+            old = {}
+    old_eps = dict(old.get("endpoints") or {})
+    # 老版本把密钥写在 compat / dashscope 段，这里接住，免得用户重填一次
+    if not old_eps:
+        for seg in ("compat", "dashscope"):
+            s = old.get(seg) or {}
+            if s.get("api_key"):
+                old_eps["default"] = {"api_key": s["api_key"]}
+                break
+
+    eps_in = values.get("endpoints")
+    if eps_in is None and (values.get("api_key") or "").strip():
+        # 只传了一个总密钥：当作 default 端点的密钥
+        eps_in = {"default": {"api_key": values["api_key"]}}
+
+    lines = [
+        "# 由应用界面写入，覆盖 config.compat.yaml 中的同名项。删掉即恢复默认。",
+        "# 密钥存在这里，已在 .gitignore 里排除；环境变量优先于这里的值。",
+    ]
+
     models = {k: v for k, v in (values.get("models") or {}).items() if v}
     if models:
         lines.append("models:")
         for k, v in models.items():
-            lines.append(f"  {k}: {v}")
+            lines.append(f"  {k}: {_yaml_str(v)}")
+
+    if eps_in is not None:
+        eps_in = {str(k): dict(v or {}) for k, v in eps_in.items() if str(k).strip()}
+        if not eps_in:
+            lines.append("endpoints: {}")   # 显式清空，不然会回落到主配置的端点
+        else:
+            lines.append("endpoints:")
+            for name, ep in eps_in.items():
+                lines.append(f"  {name}:")
+                key = (ep.pop("api_key", "") or "").strip()
+                if not key:
+                    # 留空表示"不修改"：沿用上次保存的值，不能因为没重填就清掉
+                    key = str((old_eps.get(name) or {}).get("api_key") or "")
+                for f in ("type", "base_url", "asr_base_url", "base_url_env", "api_key_env"):
+                    if ep.get(f):
+                        lines.append(f"    {f}: {_yaml_str(ep[f])}")
+                if key:
+                    lines.append(f"    api_key: {_yaml_str(key)}")
+
+    if values.get("role_endpoints") is not None:
+        re_ = {k: v for k, v in (values["role_endpoints"] or {}).items() if v}
+        if re_:
+            lines.append("role_endpoints:")
+            for k, v in re_.items():
+                lines.append(f"  {k}: {_yaml_str(v)}")
+        else:
+            lines.append("role_endpoints: {}")
+
     rt = {k: v for k, v in (values.get("runtime") or {}).items() if v not in (None, "")}
     if rt:
         lines.append("runtime:")
         for k, v in rt.items():
             lines.append(f"  {k}: {v}")
+
     if values.get("speech_assign"):
         lines.append("speech:")
         lines.append(f"  assign: {values['speech_assign']}")
-    key = (values.get("api_key") or "").strip()
-    if key or values.get("clear_key"):
-        # 密钥写进本地配置：环境变量仍然优先，这里只是让界面能配。
-        # 该文件在 .gitignore 里，不会被提交；删掉即失效。
-        try:
-            prov = (load_config(CFG_DEFAULT).get("provider") or "compat").strip()
-        except Exception:
-            prov = "compat"
-        seg = "dashscope" if prov == "dashscope" else "compat"
-        lines.append(f"# 密钥存在本机配置文件里，不进 git；环境变量优先于这里的值。")
-        lines.append(f"{seg}:")
-        lines.append(f"  api_key: {json.dumps(key)}")
+
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return p
 
@@ -280,32 +331,61 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             return {"error": f"{type(e).__name__}: {e}"}
         local = DATA / "config" / "config.local.yaml"
-        compat = cfg.get("compat") or {}
-        # 密钥来源要能区分：环境变量优先，界面保存的作为兜底
-        env_key = os.getenv(compat.get("api_key_env", "LLM_API_KEY")) or os.getenv("DASHSCOPE_API_KEY")
-        local_key = compat.get("api_key") or (cfg.get("dashscope") or {}).get("api_key")
-        source = "env" if env_key else ("local" if local_key else "")
+        eps = resolve_endpoints(cfg)
+        default_ep = default_endpoint_name(cfg)
+        rmap = role_endpoint_map(cfg)
+        view_eps = []
+        for name, ep in eps.items():
+            key = endpoint_key(ep)
+            view_eps.append({
+                "name": name,
+                "type": ep.get("type") or "compat",
+                "base_url": ep.get("base_url", ""),
+                "base_url_env": ep.get("base_url_env", ""),
+                "asr_base_url": ep.get("asr_base_url", ""),
+                "api_key_env": ep.get("api_key_env", ""),
+                "has_key": bool(key),
+                "key_source": endpoint_key_source(ep),
+                "key_hint": f"…{key[-4:]}" if key else "",
+                "is_default": name == default_ep,
+            })
+        d = eps.get(default_ep) or {}
         return {
             "models": cfg.get("models") or {},
+            # 端点池：每个端点一份地址一份密钥，界面按这个渲染
+            "endpoints": view_eps,
+            "role_endpoints": {r: endpoint_for_role(cfg, r) for r in
+                               ("asr", "sed", "music", "vl", "merge", "calibrate")},
+            "default_endpoint": default_ep,
             "runtime": {k: cfg.get("runtime", {}).get(k) for k in
                         ("max_workers", "vl_max_tokens", "retry")},
             "speech_assign": (cfg.get("speech") or {}).get("assign", "whole"),
             "shot": {k: cfg.get("preprocess", {}).get("shot_split", {}).get(k)
                      for k in ("scene_threshold", "min_shot_sec", "max_shot_sec")},
-            "base_url": os.getenv(compat.get("base_url_env", "LLM_BASE_URL"))
-                        or compat.get("base_url", ""),
+            "base_url": d.get("base_url", ""),
             "provider": getattr(self.server, "provider", "") or cfg.get("provider", ""),
-            "has_api_key": bool(env_key or local_key),
-            "api_key_source": source,
-            "api_key_hint": f"…{str(local_key)[-4:]}" if local_key else "",
+            # 下面三项是"默认端点"的汇总，给旧前端和顶部状态条用
+            "has_api_key": any(e["has_key"] for e in view_eps),
+            # 具体是哪个端点缺密钥：只报"未配置"用户不知道去改哪一条
+            "missing_key_endpoints": [e["name"] for e in view_eps if not e["has_key"]],
+            "api_key_source": next((e["key_source"] for e in view_eps
+                                    if e["is_default"] and e["key_source"]), ""),
+            "api_key_hint": next((e["key_hint"] for e in view_eps if e["is_default"]), ""),
             "local_file": str(local) if local.exists() else "",
         }
 
     def _save_config(self, body: dict):
         try:
             p = _save_local_config(body)
-            return self._json({"ok": True, "file": str(p),
-                               "config": self._config_view()})
+            view = self._config_view()
+            # 传了密钥就必须真的能读回来：之前的表现正是"提示已保存、实际没存上"，
+            # 用户填完一直显示未配置。存不上当场说，别让人自己发现。
+            sent = (body.get("api_key") or "").strip()
+            if sent and not any((e.get("key_hint") or "").endswith(sent[-4:])
+                                for e in view.get("endpoints") or []):
+                return self._json({"error": "密钥没能写入配置文件，请检查 config 目录的写权限",
+                                   "config": view}, 500)
+            return self._json({"ok": True, "file": str(p), "config": view})
         except Exception as e:
             return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
 
@@ -317,7 +397,8 @@ class Handler(BaseHTTPRequestHandler):
         """
         try:
             payload = body.get("config") or body
-            if body.get("save", True) and (payload.get("models") or payload.get("api_key")):
+            if body.get("save", True) and (payload.get("models") or payload.get("api_key")
+                                           or payload.get("endpoints")):
                 _save_local_config(payload)      # 允许"边测边存"，省一步
             cfg = load_config(CFG_DEFAULT)
             import importlib.util
@@ -385,9 +466,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": f"文件不存在：{video}"}, 400)
         # 缺密钥就别开跑了：跑下去要先把视频切镜、抽帧、抽音轨，几分钟后才在调用模型时失败
         view = self._config_view()
-        if view.get("provider") != "mock" and not view.get("has_api_key"):
-            return self._json({"error": "还没配置 API Key。右侧「配置 → API Key」填一个，"
-                                       "或先点「测试模型」确认能连通。"}, 400)
+        if view.get("provider") != "mock":
+            missing = set(view.get("missing_key_endpoints") or [])
+            if missing:
+                # 只拦真正会用到的端点：没启用的技能不必配密钥。
+                # 按角色查，比"总有没有密钥"准：音频有密钥不代表视觉那家也配好了。
+                try:
+                    cfg = load_config(CFG_DEFAULT)
+                    sk = cfg.get("skills") or {}
+                    roles = [r for r in ("asr", "sed", "music", "vl") if (sk.get(r) or {}).get("enabled", True)]
+                    roles += ["merge", "calibrate"]
+                    used = {endpoint_for_role(cfg, r) for r in roles}
+                except Exception:
+                    used = missing
+                need = sorted(missing & used)
+                if need:
+                    return self._json({
+                        "error": f"端点「{'、'.join(need)}」还没配 Key。"
+                                 f"右侧「配置 → 端点」里，对应的那一行填一个密钥。"}, 400)
         if (body.get("config") or {}).get("models"):
             _save_local_config(body["config"])
         t = threading.Thread(target=_run_job,

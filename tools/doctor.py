@@ -61,6 +61,16 @@ def _python_ok(rep: Report):
     rep.add(BAD, "Python", f"{cur}，需要 {PY_MIN[0]}.{PY_MIN[1]} 及以上")
 
 
+def _needs_dashscope(cfg) -> bool:
+    """只要有任意一个端点走 dashscope，就得装 openai/requests。"""
+    try:
+        from src.clients import resolve_endpoints
+        return any((e.get("type") or "").lower() == "dashscope"
+                   for e in resolve_endpoints(cfg or {}).values())
+    except Exception:
+        return str((cfg or {}).get("provider", "")).lower() == "dashscope"
+
+
 def _deps(rep: Report, fix: bool, provider: str):
     need = DS_DEPS if provider == "dashscope" else []
     missing_need = [pkg for mod, pkg in need if importlib.util.find_spec(mod) is None]
@@ -256,15 +266,22 @@ def _credentials(rep: Report, cfg):
     if provider == "mock":
         rep.add(OK, "API 凭据", "provider=mock，无需凭据")
         return
-    if provider == "compat":
-        need = ["LLM_BASE_URL", "LLM_API_KEY"]
+    # 按端点检查：每个端点一份地址一份密钥，缺哪个说哪个，不要一句"未设置"糊过去
+    try:
+        from src.clients import endpoint_key, resolve_endpoints
+        eps = resolve_endpoints(cfg)
+    except Exception as e:
+        rep.add(WARN, "API 凭据", f"端点解析失败：{type(e).__name__}: {e}")
+        return
+    if not eps:
+        rep.add(WARN, "API 凭据", "配置里没有端点")
+        return
+    bad = [n for n, ep in eps.items() if not endpoint_key(ep)]
+    if bad:
+        rep.add(WARN, "API 凭据",
+                f"端点 {'、'.join(bad)} 没有密钥（界面里填，或设对应的环境变量）")
     else:
-        need = ["DASHSCOPE_API_KEY"]
-    missing = [k for k in need if not os.getenv(k)]
-    if missing:
-        rep.add(WARN, "API 凭据", f"未设置 {'、'.join(missing)}（离线跑可忽略）")
-    else:
-        rep.add(OK, "API 凭据", f"{'、'.join(need)} 已设置")
+        rep.add(OK, "API 凭据", f"{len(eps)} 个端点都已配密钥")
 
 
 def quick_check(config_path: str) -> int:
@@ -272,7 +289,7 @@ def quick_check(config_path: str) -> int:
     rep = Report()
     _python_ok(rep)
     cfg = _config(rep, config_path)
-    _deps(rep, False, str((cfg or {}).get("provider", "")).lower())
+    _deps(rep, False, "dashscope" if _needs_dashscope(cfg) else "compat")
     _ffmpeg(rep, False, False)
     _prompts(rep)
     _credentials(rep, cfg)
@@ -292,7 +309,7 @@ def main() -> int:
     rep = Report()
     _python_ok(rep)
     cfg = _config(rep, args.config)
-    provider = str((cfg or {}).get("provider", "")).lower()
+    provider = "dashscope" if _needs_dashscope(cfg) else "compat"
     _deps(rep, args.fix, provider)
     _ffmpeg(rep, args.fix, not args.no_download)
     _prompts(rep)

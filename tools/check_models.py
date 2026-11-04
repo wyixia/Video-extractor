@@ -158,7 +158,7 @@ def collect(cfg: dict, roles=None) -> tuple:
         return [], f"未知角色：{unknown}，可选：{list(ROLES)}"
 
     try:
-        client = build_client(cfg)
+        router = build_client(cfg)
     except Exception as e:
         return [], f"{type(e).__name__}: {e}"
 
@@ -171,8 +171,27 @@ def collect(cfg: dict, roles=None) -> tuple:
                 results.append({"role": role, "model": "-", "status": FAIL,
                                 "detail": "配置里没有该角色的模型名", "desc": ROLES[role][2]})
                 continue
-            results.append(check_role(client, cfg, role, model, tmp))
+            # 每个角色可能落在不同端点上，客户端要按角色取，不能共用一个
+            try:
+                fn = getattr(router, "for_role", None)
+                client = fn(role) if fn else router
+            except Exception as e:
+                results.append({"role": role, "model": model, "status": FAIL,
+                                "endpoint": _ep_of(cfg, role),
+                                "detail": f"{type(e).__name__}: {e}", "desc": ROLES[role][2]})
+                continue
+            r = check_role(client, cfg, role, model, tmp)
+            r["endpoint"] = _ep_of(cfg, role)
+            results.append(r)
     return results, ""
+
+
+def _ep_of(cfg: dict, role: str) -> str:
+    try:
+        from src.clients import endpoint_for_role
+        return endpoint_for_role(cfg, role)
+    except Exception:
+        return ""
 
 
 def run_check(cfg: dict, roles=None, quiet: bool = False) -> int:

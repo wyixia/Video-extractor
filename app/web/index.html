@@ -65,7 +65,7 @@ h1{font-size:19px;margin:0 0 4px} h2{font-size:14px;margin:0 0 12px;color:var(--
 .tab{padding:6px 12px;border-radius:7px;color:var(--dim);font-size:13px;background:none}
 .tab.on{background:var(--panel2);color:var(--text)}
 .models{display:grid;gap:10px}
-.mrow{display:grid;grid-template-columns:74px 1fr;gap:10px;align-items:center}
+.mrow{display:grid;grid-template-columns:74px minmax(0,1fr) 116px;gap:10px;align-items:center}
 .mrow span{font-size:12.5px;color:var(--dim)}
 .mrow span i{display:block;font-size:11px;color:var(--faint);font-style:normal}
 
@@ -130,9 +130,27 @@ video{width:100%;border-radius:12px;background:#000;display:block;max-height:300
 .mres:first-of-type{border-top:none}
 .mres .nm{color:var(--dim)}
 .mres .dt{line-height:1.55}
+.mres .dt .ep{color:var(--faint);font-size:11.5px}
 .keyrow{display:flex;gap:8px}
 .keyrow input{flex:1}
 .keyrow button{flex:none}
+
+/* 端点：一份地址 + 一份密钥 */
+.ephead{display:flex;justify-content:space-between;align-items:center;margin:16px 0 8px}
+.ephead label{font-size:12.5px;color:var(--dim)}
+.eplist{display:grid;gap:10px}
+.epcard{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+  padding:10px 12px;display:grid;gap:8px}
+.epcard.missing{border-color:#5a3a1a}
+.eprow{display:flex;gap:8px;align-items:center}
+.eprow input.ep-name{flex:0 0 132px;font-size:12.5px;font-weight:500}
+.eprow select{flex:0 0 140px;font-size:12.5px}
+.epstate{font-size:11.5px;color:var(--dim);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.epstate .tag{background:#12301c;color:var(--ok);border:1px solid #1d4a2c;
+  padding:1px 7px;border-radius:5px}
+.epstate .tag.env{background:#12233d;color:#79b8ff;border-color:#1d3a5f}
+.epstate .tag.bad{background:#3a1a1a;color:#ff9a9a;border-color:#5a2626}
+.mrow select{font-size:12px}
 @media(max-width:980px){
   #stage-pick,.done-grid{grid-template-columns:1fr}
   .player{position:static}
@@ -151,7 +169,7 @@ video{width:100%;border-radius:12px;background:#000;display:block;max-height:300
   <!-- 1. 选择 + 配置 -->
   <section id="stage-pick">
     <div class="banner" id="keyBanner" style="grid-column:1/-1;display:none">
-      <span><b>还没配置 API Key</b>，现在点「开始标注」会直接被打回。</span>
+      <span id="keyBannerText"><b>还没配置 API Key</b>，现在点「开始标注」会直接被打回。</span>
       <button class="btn" id="gotoKey">去配置</button>
     </div>
     <div class="card">
@@ -184,29 +202,25 @@ video{width:100%;border-radius:12px;background:#000;display:block;max-height:300
 
       <div id="tab-models">
         <div class="models">
-          <div class="mrow"><span>台词 ASR<i>需音频</i></span><input id="m-asr" placeholder="qwen3.5-omni-plus"></div>
-          <div class="mrow"><span>环境音<i>需音频</i></span><input id="m-sed"></div>
-          <div class="mrow"><span>音乐<i>需音频</i></span><input id="m-music"></div>
-          <div class="mrow"><span>画面<i>需视觉</i></span><input id="m-vl"></div>
-          <div class="mrow"><span>总览<i>纯文本</i></span><input id="m-merge"></div>
+          <div class="mrow"><span>台词 ASR<i>需音频</i></span><input id="m-asr" placeholder="qwen3.5-omni-plus"><select id="ep-asr"></select></div>
+          <div class="mrow"><span>环境音<i>需音频</i></span><input id="m-sed"><select id="ep-sed"></select></div>
+          <div class="mrow"><span>音乐<i>需音频</i></span><input id="m-music"><select id="ep-music"></select></div>
+          <div class="mrow"><span>画面<i>需视觉</i></span><input id="m-vl"><select id="ep-vl"></select></div>
+          <div class="mrow"><span>总览<i>纯文本</i></span><input id="m-merge"><select id="ep-merge"></select></div>
         </div>
-        <div class="field" style="margin-top:14px">
-          <label>接口地址</label>
-          <input id="baseUrl" placeholder="https://…/compatible-mode/v1">
+
+        <div class="ephead">
+          <label>端点 · 地址与密钥</label>
+          <button class="btn ghost sm" id="addEp">新增端点</button>
         </div>
-        <div class="field">
-          <label>API Key <span id="keyState" class="hint"></span></label>
-          <div class="keyrow">
-            <input id="apiKey" type="password" autocomplete="off" placeholder="sk-…（已设置可留空）">
-            <button class="btn ghost sm" id="toggleKey">显示</button>
-          </div>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <div class="eplist" id="epList"></div>
+
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px">
           <button class="btn ghost sm" id="testModels">测试模型能不能用</button>
           <span class="hint" id="testHint">真调一次，音频要确实进了模型才算通过</span>
         </div>
         <div class="mtest" id="mtest"></div>
-        <p class="hint" style="margin-top:10px">密钥存本机 <code>config/config.local.yaml</code>，不进 git；环境变量优先于这里。</p>
+        <p class="hint" style="margin-top:10px">每行模型右边可以选它走哪个端点。密钥存本机 <code>config/config.local.yaml</code>，不进 git；环境变量优先于这里。</p>
       </div>
 
       <div id="tab-run" style="display:none">
@@ -336,80 +350,186 @@ function goTab(name){
   $("#tab-models").style.display = name === "models" ? "" : "none";
   $("#tab-run").style.display = name === "run" ? "" : "none";
 }
+const EP_TYPES = [["compat","OpenAI 兼容"],["dashscope","阿里云百炼"]];
+const ROLE_KEYS = ["asr","sed","music","vl","merge"];
+
 async function loadCfg(){
   try{
     const c = await api("/api/config");
     cfgs = c;
     const m = c.models || {};
-    $("#m-asr").value = m.asr || ""; $("#m-sed").value = m.sed || "";
-    $("#m-music").value = m.music || ""; $("#m-vl").value = m.vl || "";
-    $("#m-merge").value = m.merge || "";
-    $("#baseUrl").value = c.base_url || "";
+    ROLE_KEYS.forEach(r => { const i = $("#m-"+r); if(i) i.value = m[r] || ""; });
     $("#r-workers").value = (c.runtime || {}).max_workers || 4;
     $("#r-speech").value = c.speech_assign || "whole";
     $("#r-scene").value = (c.shot || {}).scene_threshold ?? 0.2;
     $("#r-maxshot").value = (c.shot || {}).max_shot_sec ?? 10;
-    // 密钥不回显：只提示"已有"和尾巴四位，输入框留空表示不修改
-    $("#apiKey").value = "";
-    if(c.has_api_key){
-      $("#apiKey").placeholder = c.api_key_source === "env"
-        ? "已由环境变量提供，留空即可"
-        : "已保存（" + (c.api_key_hint || "****") + "），留空不修改";
-      $("#keyState").textContent = c.api_key_source === "env" ? "来自环境变量" : "已保存在本机";
-    }else{
-      $("#apiKey").placeholder = "sk-…";
-      $("#keyState").textContent = "还没填";
-    }
+    renderEndpoints(c.endpoints || []);
+    syncRoleOptions(c.role_endpoints || {});
     paintStatus(c);
   }catch(e){ toast("读取配置失败：" + e.message); }
 }
+
+/* ---------- 端点：一份地址 + 一份密钥 ---------- */
+function endpointNames(){
+  return $$(".epcard").map(c => c.querySelector(".ep-name").value.trim()).filter(Boolean);
+}
+function renderEndpoints(eps){
+  const box = $("#epList"); box.innerHTML = "";
+  if(!eps.length){ box.append(el("div","hint","还没有端点，点「新增端点」加一个")); return; }
+  eps.forEach(ep => box.append(epCard(ep)));
+}
+function epCard(ep){
+  const card = el("div","epcard" + (ep.has_key ? "" : " missing"));
+  card._raw = ep;
+
+  const row = el("div","eprow");
+  const name = el("input"); name.className = "ep-name"; name.value = ep.name || "default";
+  name.title = "端点名字，模型那几行的下拉用它";
+  name.oninput = () => syncRoleOptions();
+  const type = el("select");
+  EP_TYPES.forEach(([v,label]) => { const o = el("option",null,label); o.value = v; type.append(o); });
+  type.value = ep.type || "compat";
+  const eye = el("button","btn ghost sm","显示");
+  const del = el("button","btn ghost sm","删除");
+  row.append(name, type, eye, del);
+
+  const base = el("input"); base.className = "ep-base";
+  base.placeholder = "接口地址，如 https://…/compatible-mode/v1";
+  base.value = ep.base_url || "";
+
+  const keyrow = el("div","keyrow");
+  const keyin = el("input"); keyin.className = "ep-key"; keyin.type = "password";
+  keyin.autocomplete = "off";
+  keyin.placeholder = ep.has_key
+    ? (ep.key_source === "env" ? "已由环境变量提供，留空即可" : "已保存，留空表示不改")
+    : "sk-…（这个端点还没有密钥）";
+  keyrow.append(keyin);
+
+  const st = el("div","epstate");
+  if(ep.has_key){
+    st.append(el("span","tag" + (ep.key_source === "env" ? " env" : ""),
+                 ep.key_source === "env" ? "环境变量提供" : "已保存 " + (ep.key_hint || "")));
+  }else{
+    st.append(el("span","tag bad","缺密钥"));
+  }
+  if(ep.is_default) st.append(el("span",null,"默认端点"));
+  if(ep.api_key_env) st.append(el("span",null,"读环境变量 " + ep.api_key_env));
+
+  eye.onclick = () => {
+    const show = keyin.type === "password";
+    keyin.type = show ? "text" : "password";
+    eye.textContent = show ? "隐藏" : "显示";
+  };
+  del.onclick = () => {
+    const names = endpointNames();
+    if(names.length <= 1){ toast("至少留一个端点"); return; }
+    card.remove(); syncRoleOptions();
+  };
+
+  card.append(row, base, keyrow, st);
+  return card;
+}
+function syncRoleOptions(rmap){
+  const names = endpointNames();
+  const def = (cfgs && cfgs.default_endpoint) || names[0] || "default";
+  ROLE_KEYS.forEach(r => {
+    const sel = $("#ep-"+r); if(!sel) return;
+    const want = (rmap && rmap[r]) || sel.value || def;
+    const keep = sel.value;
+    sel.innerHTML = "";
+    names.forEach(n => { const o = el("option",null,n); o.value = n; sel.append(o); });
+    const pick = [want, keep].find(x => names.includes(x)) || names[0] || "";
+    if(pick) sel.value = pick;
+  });
+}
+$("#addEp").onclick = () => {
+  const used = new Set(endpointNames());
+  let n = 1, nm;
+  do { nm = "ep" + n++; } while(used.has(nm));
+  $("#epList").append(epCard({name:nm, type:"compat", base_url:"", has_key:false}));
+  syncRoleOptions();
+};
 function paintStatus(c){
   const s = $("#status"); s.innerHTML = "";
-  // mock 是离线演示模式，本来就不需要密钥，别误报
-  const ok = !!c.has_api_key || c.provider === "mock";
-  const p1 = el("div","pill"); p1.append(el("i","dot " + (ok?"ok":"bad")));
-  p1.append(document.createTextNode("密钥 " + (ok?"已设置":"未设置")));
+  const eps = c.endpoints || [];
+  const miss = c.missing_key_endpoints || [];
+  const demo = c.provider === "mock";
+  const ok = demo || (eps.length > 0 && miss.length === 0);
+  const p1 = el("div","pill");
+  p1.append(el("i","dot " + (ok ? "ok" : "bad")));
+  p1.append(document.createTextNode(demo ? "演示模式" :
+    ok ? `密钥就绪（${eps.length} 个端点）` : `缺密钥：${miss.join("、")}`));
   if(!ok){
     p1.style.cursor = "pointer"; p1.title = "点击去填";
-    p1.onclick = () => { goTab("models"); $("#apiKey").focus(); };
+    p1.onclick = () => { goTab("models"); focusKey(); };
   }
   s.append(p1);
   const p2 = el("div","pill"); p2.append(el("b",null, c.provider || "-")); s.append(p2);
   if(c.local_file){ const p = el("div","pill"); p.append(el("b",null,"本机配置")); s.append(p); }
   // 挡住流程的问题放顶部，别让用户点下去才被打回
   $("#keyBanner").style.display = ok ? "none" : "flex";
+  const kb = $("#keyBannerText");
+  if(kb) kb.textContent = miss.length
+    ? `端点「${miss.join("、")}」还没有密钥，填完才能开始标注。`
+    : "还没有配置模型密钥，填完才能开始标注。";
+}
+function focusKey(){
+  const first = $(".epcard.missing .ep-key") || $(".ep-key");
+  if(first) first.focus();
 }
 
 function cfgBody(){
+  // 端点：name / type / 地址 / 密钥。密钥空着表示"不修改"，后端会沿用上次的值
+  const eps = {};
+  $$(".epcard").forEach(card => {
+    const name = card.querySelector(".ep-name").value.trim();
+    if(!name) return;
+    const raw = card._raw || {};
+    const o = { type: card.querySelector(".ep-type").value,
+                base_url: card.querySelector(".ep-base").value.trim() };
+    const k = card.querySelector(".ep-key").value.trim();
+    if(k) o.api_key = k;
+    ["api_key_env","base_url_env","asr_base_url"].forEach(f => { if(raw[f]) o[f] = raw[f]; });
+    eps[name] = o;
+  });
+  const models = {};
+  ROLE_KEYS.forEach(r => { models[r] = $("#m-"+r).value.trim(); });
+  const rmap = {};
+  ROLE_KEYS.forEach(r => { const s = $("#ep-"+r); if(s && s.value) rmap[r] = s.value; });
   return {
-    models:{asr:$("#m-asr").value.trim(), sed:$("#m-sed").value.trim(),
-            music:$("#m-music").value.trim(), vl:$("#m-vl").value.trim(),
-            merge:$("#m-merge").value.trim()},
+    models,
+    endpoints: eps,
+    role_endpoints: rmap,
     runtime:{max_workers:Number($("#r-workers").value)||4},
-    speech_assign:$("#r-speech").value,
-    api_key:$("#apiKey").value.trim() || undefined
+    speech_assign:$("#r-speech").value
   };
 }
 async function saveCfg(silent){
   try{
-    await api("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},
+    const r = await api("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},
        body:JSON.stringify(cfgBody())});
-    $("#apiKey").value = "";
-    if(!silent) toast("已保存到本机配置");
+    $$(".ep-key").forEach(i => i.value = "");   // 已存的不回显，留空即不改
     await loadCfg();
+    if(!silent){
+      // 存了就说存了，缺密钥就直说缺哪个：不要一律"已保存"让人以为好了
+      const miss = (r.config && r.config.missing_key_endpoints) || [];
+      toast(miss.length ? `已保存，但端点「${miss.join("、")}」还没有密钥` : "已保存");
+    }
     return true;
   }catch(e){ toast("保存失败：" + e.message); return false; }
 }
 $("#saveCfg").onclick = async () => {
   const ok = await saveCfg(false);
-  $("#saveHint").textContent = ok ? "已写入 config/config.local.yaml" : "";
+  if(ok && cfgs){
+    const miss = cfgs.missing_key_endpoints || [];
+    $("#saveHint").textContent = miss.length
+      ? `已写入 config/config.local.yaml · 还缺密钥：${miss.join("、")}`
+      : "已写入 config/config.local.yaml";
+  }else{
+    $("#saveHint").textContent = "";
+  }
 };
-$("#toggleKey").onclick = () => {
-  const i = $("#apiKey"), show = i.type === "password";
-  i.type = show ? "text" : "password";
-  $("#toggleKey").textContent = show ? "隐藏" : "显示";
-};
-$("#gotoKey").onclick = () => { goTab("models"); $("#apiKey").focus(); };
+$("#gotoKey").onclick = () => { goTab("models"); focusKey(); };
 
 /* 模型实测：不是看 200，要看到音频 token、要能返回约定 JSON */
 $("#testModels").onclick = async () => {
@@ -420,7 +540,7 @@ $("#testModels").onclick = async () => {
     const r = await api("/api/check-models",{method:"POST",
       headers:{"Content-Type":"application/json"}, body:JSON.stringify(cfgBody())});
     renderTest(r);
-    $("#apiKey").value = "";
+    $$(".ep-key").forEach(i => i.value = "");
     loadCfg();
   }catch(e){
     const box = $("#mtest"); box.classList.add("show"); box.innerHTML = "";
@@ -445,6 +565,7 @@ function renderTest(r){
     row.append(el("span","nm", x.role));
     const dt = el("div","dt");
     dt.append(el("b",null, x.model + "  "));
+    if(x.endpoint) dt.append(el("span","ep", "→ " + x.endpoint + "  "));
     dt.append(document.createTextNode(x.detail || ""));
     row.append(dt);
     box.append(row);
@@ -509,15 +630,11 @@ drop.addEventListener("drop", e => {
 /* ---------- 运行 ---------- */
 $("#start").onclick = async () => {
   if(!video) return;
-  // 缺密钥就别让它跑：切镜抽帧要几分钟，跑到调模型才失败等于白等
-  if(cfgs && !cfgs.has_api_key && cfgs.provider !== "mock"){
-    toast("还没配 API Key，先填一个");
-    goTab("models"); $("#apiKey").focus();
-    return;
-  }
   $("#start").disabled = true;
   try{
-    await saveCfg(true);
+    // 先把填的内容落盘再校验：之前是拿页面加载时的旧状态判断，
+    // 用户刚填好密钥还没点保存就被打回"没配置"，怎么填都进不去。
+    if(!await saveCfg(true)){ $("#start").disabled = false; return; }
     await api("/api/start",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({video, speech_assign:$("#r-speech").value})});
     showRun(); startPoll();
@@ -525,7 +642,7 @@ $("#start").onclick = async () => {
     toast(e.message);
     $("#start").disabled = false;
     // 被打回的原因如果是配置问题，直接把入口摆出来
-    if(/API Key|密钥/.test(e.message)){ goTab("models"); $("#apiKey").focus(); }
+    if(/API Key|密钥/.test(e.message)){ goTab("models"); focusKey(); }
   }
 };
 function showRun(){
@@ -587,7 +704,7 @@ function paintError(msg){
     b.style.marginTop = "10px";
     b.onclick = () => {
       backToPick(); goTab("models");
-      if(act === "test") $("#testModels").click(); else $("#apiKey").focus();
+      if(act === "test") $("#testModels").click(); else focusKey();
     };
     box.append(b);
   }
