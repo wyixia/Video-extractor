@@ -47,7 +47,7 @@
 | | lite | full |
 |---|---|---|
 | 内容 | 只有代码 | 代码 + Python 运行时 + ffmpeg |
-| 体积 | 约 0.1 MB | 约 200 MB |
+| 体积 | 约 0.2 MB | 约 61 MB |
 | 前提 | 自己装 Python 3.9+ | 双击即用 |
 | ffmpeg | 启动时自动检测，缺了自动下载 | 已内置 |
 | 适合 | 想改代码、机器上已有 Python | 只想用 |
@@ -59,8 +59,8 @@
 ### lite
 
 ```bash
-unzip VideoExtractor-1.1.0-lite.zip
-cd VideoExtractor-1.1.0-lite
+unzip VideoExtractor-1.2.0-lite.zip
+cd VideoExtractor-1.2.0-lite
 python tools/doctor.py --fix      # 缺什么装什么
 python -m app.server --desktop    # 开独立窗口
 ```
