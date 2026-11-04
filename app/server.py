@@ -337,8 +337,13 @@ class Handler(BaseHTTPRequestHandler):
         """显式退出。任务在跑时拒绝，避免把用户正在跑的活掐掉。"""
         if self.server.job.snapshot()["status"] == "running":
             return self._json({"error": "任务还在跑，等它结束再关"}, 409)
+        # 桌面模式下由窗口接管：关窗口比停服务更符合直觉
+        on_quit = getattr(self.server, "on_quit", None)
         self._json({"ok": True})
-        threading.Thread(target=self.server.shutdown, daemon=True).start()
+        if on_quit:
+            threading.Thread(target=on_quit, daemon=True).start()
+        else:
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
         return None
 
     def _prompt_view(self, name: str) -> dict:
@@ -562,12 +567,19 @@ def _watchdog(srv, grace: float = 30.0):
         return
 
 
-def serve(port: int = 0, open_browser: bool = True, provider: str = "",
-          watchdog: bool = True):
+def build_server(port: int = 0, provider: str = ""):
+    """建好服务但不启动。桌面窗口和浏览器两种模式共用这一份。"""
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     srv.job = Job()
     srv.provider = provider
     srv.last_seen = time.time()
+    srv.on_quit = None          # 桌面模式里由窗口接管"退出"
+    return srv
+
+
+def serve(port: int = 0, open_browser: bool = True, provider: str = "",
+          watchdog: bool = True):
+    srv = build_server(port, provider)
     real = srv.server_address[1]
     url = f"http://127.0.0.1:{real}/"
     print(f"[应用] {url}")
@@ -592,5 +604,13 @@ if __name__ == "__main__":
                     help="覆盖配置的 provider；mock 用假数据跑通界面，不联网")
     ap.add_argument("--no-watchdog", action="store_true",
                     help="界面关掉后不自动退出（调试或脚本调用时用）")
+    ap.add_argument("--desktop", action="store_true",
+                    help="开原生窗口（需要 pywebview；没有就回退浏览器）")
     a = ap.parse_args()
+    if a.desktop:
+        from app.desktop import run
+        try:
+            raise SystemExit(run(a.port, a.provider))
+        except RuntimeError as e:
+            print(f"[应用] 打不开窗口（{e}），改用浏览器")
     serve(a.port, not a.no_browser, a.provider, watchdog=not a.no_watchdog)

@@ -28,7 +28,7 @@ PY_MIN = (3, 9)
 # 依赖不是一概必需：compat 端点走标准库 urllib，零第三方依赖也能跑；
 # 只有 dashscope 客户端要用 openai/requests。PyYAML 缺了会退化成简化解析器。
 DS_DEPS = [("openai", "openai>=1.52.0"), ("requests", "requests>=2.31.0")]
-NICE_DEPS = [("yaml", "PyYAML>=6.0")]
+NICE_DEPS = [("yaml", "PyYAML>=6.0"), ("webview", "pywebview>=5.0")]
 
 FFMPEG_WIN = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 FFMPEG_LINUX = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
@@ -73,7 +73,8 @@ def _deps(rep: Report, fix: bool, provider: str):
         if missing_need:
             rep.add(BAD, "Python 依赖", f"缺 {'、'.join(missing_need)}（加 --fix 自动安装）", True)
         if missing_nice:
-            rep.add(WARN, "可选依赖", f"缺 {'、'.join(missing_nice)}，配置解析会退化")
+            rep.add(WARN, "可选依赖", f"缺 {'、'.join(missing_nice)}"
+                                       f"（PyYAML 影响配置解析，pywebview 影响原生窗口；加 --fix 装）")
         return
     todo = missing_need + missing_nice
     print(f"   正在安装：{'、'.join(todo)} …")

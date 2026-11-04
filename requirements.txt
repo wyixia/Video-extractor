@@ -4,6 +4,10 @@ PyYAML>=6.0
 requests>=2.31.0
 jsonschema>=4.20.0
 
+# 原生窗口（不装就用浏览器打开，功能一样）
+# Windows 需要系统带 WebView2 Runtime（Win10/11 一般都有）
+pywebview>=5.0
+
 # 测试
 pytest>=8.0.0
 

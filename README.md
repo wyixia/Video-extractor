@@ -59,10 +59,10 @@
 ### lite
 
 ```bash
-unzip VideoExtractor-1.0.2-lite.zip
-cd VideoExtractor-1.0.2-lite
+unzip VideoExtractor-1.1.0-lite.zip
+cd VideoExtractor-1.1.0-lite
 python tools/doctor.py --fix      # 缺什么装什么
-python -m app.server              # 浏览器会自动打开
+python -m app.server --desktop    # 开独立窗口
 ```
 
 Windows 双击 `start.bat`；macOS / Linux 用 `./start.sh`。
@@ -70,6 +70,13 @@ Windows 双击 `start.bat`；macOS / Linux 用 `./start.sh`。
 ### full
 
 解压后双击 `VideoExtractor.exe`（Windows）或 `start.sh`。没有控制台窗口，日志在 `_work/app.log`。
+
+### 界面形态
+
+默认开一个独立的应用窗口（pywebview + 系统 WebView2），不跳浏览器。窗口关掉服务就退出。
+
+- 想用浏览器打开：`python -m app.server`（打包版加 `--browser` 参数）
+- 机器上开不了窗口（没装 pywebview、没有 WebView2、无图形界面）会自动回退浏览器，功能一样
 
 ### 设置密钥
 

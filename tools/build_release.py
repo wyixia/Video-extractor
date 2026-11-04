@@ -54,8 +54,9 @@ if errorlevel 1 (
   exit /b 1
 )
 echo.
-echo Starting application, the browser will open automatically...
-python -m app.server
+echo Starting application...
+rem --desktop 开原生窗口；没装 pywebview 会自动回退浏览器
+python -m app.server --desktop
 if errorlevel 1 pause
 """
 
@@ -72,12 +73,13 @@ if [ -z "$PY" ]; then
 fi
 $PY tools/doctor.py --fix || { echo "[!] 环境检查未通过"; exit 1; }
 echo
-echo "启动应用，浏览器会自动打开…"
-exec $PY -m app.server
+echo "启动应用…"
+exec $PY -m app.server --desktop
 """
 
-ENV_EXAMPLE = """# 复制成 .env 后填自己的值（或直接在系统里设同名环境变量）。
-# 密钥只从环境变量读，不会写进配置文件，也不会随结果一起保存。
+ENV_EXAMPLE = """# 密钥有两个地方可放，环境变量优先于应用界面保存的值。
+# 1) 应用里：「配置 → API Key」填完保存，写进 config/config.local.yaml（不进 git）
+# 2) 这里：复制成 .env 或直接在系统里设同名环境变量
 
 # OpenAI 兼容端点
 LLM_BASE_URL=https://your-endpoint/v1
@@ -192,6 +194,10 @@ def build_full(version: str) -> Path:
         "--add-data", f"{ROOT / 'app' / 'web'}{os.pathsep}app/web",
         "--add-data", f"{ROOT / 'tools' / 'render_report.py'}{os.pathsep}tools",
         "--hidden-import", "src.prompt_guard",
+        # 原生窗口：pywebview 的 js/css 资源和 .NET 桥都得显式收，否则打包后是空白窗口
+        "--collect-all", "webview",
+        "--collect-all", "pythonnet",
+        "--hidden-import", "clr",
         str(ROOT / "app" / "launcher.py"),
     ]
     print("   正在打包可执行文件（首次较慢）…")
